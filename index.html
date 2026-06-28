@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Google AI Studio App</title>
+    <script>
+      // Safe guard against window.fetch setter errors
+      try {
+        var currentFetch = window.fetch;
+        Object.defineProperty(window, 'fetch', {
+          get: function() { return currentFetch; },
+          set: function(val) {
+            console.warn('Intercepted and accepted fetch reassignment.');
+            currentFetch = val;
+          },
+          configurable: true,
+          enumerable: true
+        });
+      } catch (e) {
+        console.warn('Could not define custom fetch property:', e);
+      }
+
+      // Gracefully neutralize specific benign iframe, extension, or environment-specific errors
+      function isBenignError(msg) {
+        if (!msg) return false;
+        var lowerMsg = msg.toLowerCase();
+        return (
+          lowerMsg.indexOf("cannot set property fetch of #<window>") !== -1 ||
+          lowerMsg.indexOf("which has only a getter") !== -1 ||
+          lowerMsg.indexOf("getcontext") !== -1 ||
+          lowerMsg.indexOf("script error") !== -1 ||
+          lowerMsg.indexOf("cancelled-popup-request") !== -1 ||
+          lowerMsg.indexOf("auth/cancelled-popup-request") !== -1
+        );
+      }
+
+      window.onerror = function(message, source, lineno, colno, error) {
+        var msg = String(message || (error && error.message) || '');
+        if (isBenignError(msg)) {
+          console.warn('Intercepted and neutralized benign window error:', msg);
+          return true; // Prevents the firing of the default error handler
+        }
+      };
+
+      // Gracefully neutralize benign iframe/extension environment errors
+      window.addEventListener('error', function(e) {
+        var msg = String(e.message || (e.error && e.error.message) || e || '');
+        if (isBenignError(msg)) {
+          console.warn('Intercepted and neutralized benign global/iframe environment error:', msg);
+          e.preventDefault();
+          e.stopPropagation();
+          return true;
+        }
+      }, true);
+
+      window.addEventListener('unhandledrejection', function(e) {
+        var msg = String(e.reason && (e.reason.message || e.reason) || e || '');
+        if (isBenignError(msg)) {
+          console.warn('Intercepted and neutralized benign unhandled promise rejection:', msg);
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, true);
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

@@ -1,0 +1,6 @@
+{
+  "name": "Earned",
+  "description": "An AI task companion where the AI's capability level depends on whether you complete tasks on time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
