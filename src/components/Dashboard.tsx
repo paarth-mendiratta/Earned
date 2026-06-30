@@ -107,6 +107,7 @@ interface DashboardProps {
   dailyCheckin: string;
   isCheckinLoading: boolean;
   onCompleteTask: (taskId: string, onTime: boolean) => void;
+  onMissTask: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
   onReorderTask?: (taskId: string, direction: 'up' | 'down') => void;
   onMoveTask?: (fromIdx: number, toIdx: number) => void;
@@ -125,6 +126,10 @@ interface DashboardProps {
   onSendEmailReply: (task: Task, draftBody: string) => void;
   isSendingEmail: string | null;
   demoMode: boolean;
+  onBypassCalendar?: () => void;
+  authError?: string | null;
+  onClearAuthError?: () => void;
+  isAuthAttemptPending?: boolean;
 }
 
 export default function Dashboard({
@@ -133,6 +138,7 @@ export default function Dashboard({
   dailyCheckin,
   isCheckinLoading,
   onCompleteTask,
+  onMissTask,
   onDeleteTask,
   onReorderTask,
   onMoveTask,
@@ -150,7 +156,11 @@ export default function Dashboard({
   onAddEmailTask,
   onSendEmailReply,
   isSendingEmail,
-  demoMode
+  demoMode,
+  onBypassCalendar,
+  authError,
+  onClearAuthError,
+  isAuthAttemptPending
 }: DashboardProps) {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [isCalendarLoading, setIsCalendarLoading] = useState(false);
@@ -287,14 +297,19 @@ export default function Dashboard({
                 <AlertTriangle className="w-3 h-3 text-red-400" /> Overdue
               </span>
             )}
-            {task.status === 'done' && (
+            {task.status === 'done' && task.completedOnTime && (
               <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-emerald-300 bg-emerald-950/50 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
                 Completed On-Time
               </span>
             )}
+            {task.status === 'done' && !task.completedOnTime && (
+              <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-amber-300 bg-amber-950/50 border border-amber-500/20 px-2.5 py-0.5 rounded-full">
+                Completed Late
+              </span>
+            )}
             {task.status === 'missed' && (
               <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-red-300 bg-red-950/50 border border-red-500/20 px-2.5 py-0.5 rounded-full">
-                Late / Missed
+                Missed Entirely
               </span>
             )}
           </div>
@@ -576,37 +591,64 @@ export default function Dashboard({
         )}
 
         {/* Inline Task Resolution Buttons */}
-        {task.status === 'pending' && (
-          <div className="flex items-center justify-between gap-4 mt-4 pt-3.5 border-t border-[#212332]">
-            <div className="text-[11px] font-mono text-slate-400">
-              Due: {new Date(task.deadline).toLocaleString()}
+        {task.status === 'pending' && (() => {
+          const now = new Date();
+          const deadlineDate = new Date(task.deadline);
+          const isDeadlineInFuture = deadlineDate > now;
+          const isDeadlinePassed = deadlineDate <= now;
+          
+          // Grace window of 24 hours
+          const graceWindowMs = 24 * 60 * 60 * 1000;
+          const isWithinGraceWindow = isDeadlinePassed && (now.getTime() - deadlineDate.getTime() <= graceWindowMs);
+
+          return (
+            <div className="flex items-center justify-between gap-4 mt-4 pt-3.5 border-t border-[#212332]">
+              <div className="text-[11px] font-mono text-slate-400">
+                Due: {deadlineDate.toLocaleString()}
+              </div>
+              <div className="flex items-center gap-2">
+                {isDeadlineInFuture && (
+                  <button
+                    id={`btn-complete-ontime-${task.id}`}
+                    onClick={() => onCompleteTask(task.id, true)}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer shadow-xs"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Complete On-Time</span>
+                  </button>
+                )}
+
+                {isDeadlinePassed && (
+                  <>
+                    <button
+                      id={`btn-complete-late-${task.id}`}
+                      onClick={() => onCompleteTask(task.id, false)}
+                      className="px-2.5 py-1.5 text-xs text-amber-400 border border-amber-500/20 bg-amber-950/20 hover:bg-amber-950/40 rounded-xl transition-all cursor-pointer font-bold animate-in fade-in duration-200"
+                    >
+                      Mark Late
+                    </button>
+                    <button
+                      id={`btn-mark-missed-${task.id}`}
+                      onClick={() => onMissTask(task.id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer shadow-xs animate-in fade-in duration-200"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <span>Mark as Missed</span>
+                    </button>
+                  </>
+                )}
+
+                <button
+                  id={`btn-delete-task-${task.id}`}
+                  onClick={() => onDeleteTask(task.id)}
+                  className="p-1.5 text-slate-400 hover:text-red-400 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                id={`btn-complete-late-${task.id}`}
-                onClick={() => onCompleteTask(task.id, false)}
-                className="px-2.5 py-1.5 text-xs text-amber-400/80 hover:text-amber-300 hover:bg-amber-950/20 rounded transition-all cursor-pointer font-bold"
-              >
-                Mark Late
-              </button>
-              <button
-                id={`btn-complete-ontime-${task.id}`}
-                onClick={() => onCompleteTask(task.id, true)}
-                className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer shadow-xs"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>Complete On-Time</span>
-              </button>
-              <button
-                id={`btn-delete-task-${task.id}`}
-                onClick={() => onDeleteTask(task.id)}
-                className="p-1.5 text-slate-400 hover:text-red-400 transition-colors cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     );
   };
@@ -750,8 +792,8 @@ export default function Dashboard({
             </div>
 
             {!calendarToken ? (
-              <div className="flex flex-col md:flex-row items-center justify-between gap-4 p-4.5 bg-indigo-950/10 border border-indigo-500/10 rounded-xl">
-                <div className="space-y-1.5 max-w-lg text-left">
+              <div className="flex flex-col lg:flex-row items-center justify-between gap-6 p-5 bg-indigo-950/15 border border-indigo-500/20 rounded-xl relative overflow-hidden">
+                <div className="space-y-2 max-w-xl text-left">
                   <span className="inline-flex items-center gap-1.5 text-[9px] font-mono text-indigo-300 uppercase font-bold tracking-widest bg-indigo-950/40 px-2.5 py-0.5 rounded-full border border-indigo-500/20">
                     AI Gmail Inbox Scanner
                   </span>
@@ -761,20 +803,84 @@ export default function Dashboard({
                   <p className="text-xs text-slate-400 leading-relaxed">
                     Connect your Google Account to let Gemini securely analyze your recent primary inbox. It automatically extracts deadlines, converts actionable messages to prioritized tasks, and lets you reply with custom generated drafts directly from your dashboard.
                   </p>
+                  
+                  {/* Google OAuth Testing Notice / Active Auth Error / Pending Connection */}
+                  {isAuthAttemptPending ? (
+                    <div className="mt-2.5 p-3.5 bg-indigo-950/25 border border-indigo-500/25 rounded-xl space-y-2.5 animate-pulse">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-2 w-2 rounded-full bg-indigo-400 animate-ping" />
+                        <h4 className="text-xs font-bold text-indigo-200">Google Connection Initialized...</h4>
+                      </div>
+                      <p className="text-[10px] text-slate-300 leading-relaxed font-mono">
+                        We have opened Google's sign-in popup. If you see Google's <strong>Access blocked (Error 403)</strong> page, you can skip authenticating and instantly activate the simulated Sandbox Demo:
+                      </p>
+                      <button
+                        onClick={onBypassCalendar}
+                        className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[10px] transition-all cursor-pointer shadow-xs text-center font-bold"
+                      >
+                        ⚡ Skip & Activate Sandbox Bypass Demo Now
+                      </button>
+                    </div>
+                  ) : authError ? (
+                    <div className="mt-2.5 p-3.5 bg-rose-950/25 border border-rose-500/25 rounded-xl space-y-3">
+                      <div className="flex items-start gap-2.5">
+                        <span className="p-1 bg-rose-950/40 border border-rose-500/30 rounded-lg text-rose-400 text-xs">⚠️</span>
+                        <div className="space-y-1">
+                          <h4 className="text-xs font-bold text-rose-200">Google Connection Blocked</h4>
+                          <p className="text-[10px] text-slate-300 leading-relaxed font-mono">
+                            Google restricts this app to testing mode. Since your email isn't added as a registered tester, Google displays <strong>access_denied (Error 403)</strong> in the popup window.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={onBypassCalendar}
+                          className="flex-1 py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[10px] transition-all cursor-pointer shadow-xs text-center font-bold"
+                        >
+                          ⚡ Activate Sandbox Bypass Demo
+                        </button>
+                        {onClearAuthError && (
+                          <button
+                            onClick={onClearAuthError}
+                            className="py-1.5 px-2.5 bg-slate-900 hover:bg-[#1a1b2c] text-slate-400 hover:text-slate-200 font-bold rounded-lg text-[10px] border border-slate-800 transition-all cursor-pointer"
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 p-2 bg-amber-950/20 border border-amber-500/10 rounded-lg text-[10px] text-amber-300/90 leading-normal font-mono">
+                      ⚠️ <strong>OAuth Testing Notice:</strong> Google has this app in Testing mode. If your email is not pre-registered as a test developer, sign-in will show an <em>access_denied (403)</em> error. Use the <strong>Sandbox Bypass</strong> to immediately test all features!
+                    </div>
+                  )}
                 </div>
-                <button
-                  id="btn-connect-gmail-panel"
-                  onClick={onConnectCalendar}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs flex-shrink-0"
-                >
-                  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-4 h-4">
-                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
-                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
-                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
-                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
-                  </svg>
-                  <span className="ml-1">Connect Google Account</span>
-                </button>
+                
+                <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 w-full lg:w-auto min-w-[200px]">
+                  <button
+                    id="btn-connect-gmail-panel"
+                    onClick={onConnectCalendar}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs w-full"
+                  >
+                    <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-4 h-4">
+                      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+                      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+                      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+                      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+                    </svg>
+                    <span>Connect Google Account</span>
+                  </button>
+
+                  {onBypassCalendar && (
+                    <button
+                      id="btn-bypass-gmail-panel"
+                      onClick={onBypassCalendar}
+                      className="flex items-center justify-center gap-1.5 px-4 py-2.5 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white font-bold rounded-xl text-xs border border-slate-800 hover:border-slate-700 transition-all cursor-pointer w-full"
+                    >
+                      <span>Sandbox Bypass Demo</span>
+                    </button>
+                  )}
+                </div>
               </div>
             ) : emailScanError ? (
               <div className="p-3 bg-red-950/20 border border-red-500/20 text-xs text-red-400 rounded-xl flex items-start gap-2 animate-in fade-in duration-150 text-left">
@@ -977,9 +1083,55 @@ export default function Dashboard({
             {/* Connection View / Prompt */}
             {!calendarToken ? (
               <div className="text-center py-4 space-y-3.5">
-                <p className="text-xs text-slate-400 leading-relaxed font-medium">
-                  Synchronize with your actual Google Account to retrieve calendar blocks and let Gemini securely extract commitments from your primary Gmail inbox.
-                </p>
+                {isAuthAttemptPending ? (
+                  <div className="p-3 bg-indigo-950/20 border border-indigo-500/20 rounded-xl space-y-2.5 text-left mb-3 animate-pulse">
+                    <div className="flex gap-2">
+                      <span className="flex h-1.5 w-1.5 rounded-full bg-indigo-400 animate-ping mt-1" />
+                      <div className="space-y-0.5">
+                        <span className="text-[11px] font-bold text-indigo-200 block">Connecting to Google...</span>
+                        <span className="text-[10px] text-slate-300 block leading-normal font-mono">
+                          If Google's popup is blocked or shows an Access Denied error, bypass it below instantly:
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={onBypassCalendar}
+                      className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[10px] transition-all cursor-pointer shadow-xs text-center font-bold"
+                    >
+                      ⚡ Skip & Sandbox Bypass Now
+                    </button>
+                  </div>
+                ) : authError ? (
+                  <div className="p-3 bg-rose-950/20 border border-rose-500/20 rounded-xl space-y-2.5 text-left mb-3 animate-in fade-in duration-150">
+                    <div className="flex gap-2">
+                      <span className="text-rose-400">⚠️</span>
+                      <div className="space-y-0.5">
+                        <span className="text-[11px] font-bold text-rose-200 block">Access Blocked (Error 403)</span>
+                        <span className="text-[10px] text-slate-300 block leading-normal">
+                          This happens because Google restricts access to pre-registered developer emails.
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={onBypassCalendar}
+                      className="w-full py-2 px-3 bg-[#10b981] hover:bg-[#059669] text-white font-bold rounded-lg text-[10px] transition-all cursor-pointer shadow-xs text-center font-bold"
+                    >
+                      ⚡ Activate Sandbox Bypass Demo
+                    </button>
+                    {onClearAuthError && (
+                      <button
+                        onClick={onClearAuthError}
+                        className="w-full py-1.5 px-3 bg-[#131420] hover:bg-[#1a1b2c] text-slate-400 hover:text-slate-300 font-semibold rounded-lg text-[10px] border border-slate-800 transition-colors cursor-pointer"
+                      >
+                        Dismiss Error
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 leading-relaxed font-medium">
+                    Synchronize with your actual Google Account to retrieve calendar blocks and let Gemini securely extract commitments from your primary Gmail inbox.
+                  </p>
+                )}
                 
                 {/* Official Sign in button mockup styled with Tailwind CSS */}
                 <button 
@@ -995,6 +1147,24 @@ export default function Dashboard({
                   </svg>
                   <span>Connect Google Account</span>
                 </button>
+
+                {onBypassCalendar && (
+                  <div className="pt-0.5">
+                    <div className="relative flex py-1.5 items-center">
+                      <div className="flex-grow border-t border-slate-800"></div>
+                      <span className="flex-shrink mx-2.5 text-[9px] text-slate-500 font-mono uppercase tracking-widest font-bold">OR</span>
+                      <div className="flex-grow border-t border-slate-800"></div>
+                    </div>
+                    
+                    <button 
+                      id="btn-bypass-sign-in"
+                      onClick={onBypassCalendar}
+                      className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white font-semibold rounded-xl border border-slate-850 hover:border-slate-800 transition-all cursor-pointer text-[11px] shadow-2xs"
+                    >
+                      <span>Bypass Login / Sandbox Demo</span>
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-3.5">

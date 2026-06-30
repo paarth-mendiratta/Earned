@@ -706,6 +706,48 @@ app.post("/api/gmail/detect-tasks", async (req, res) => {
       return res.status(400).json({ error: "accessToken is required" });
     }
 
+    if (accessToken.startsWith("demo-") || accessToken.startsWith("mock-")) {
+      console.log("[Gmail API Simulation] Generating simulated tasks from mock emails.");
+      const tomorrow = new Date(Date.now() + 86400000).toISOString();
+      const inTwoDays = new Date(Date.now() + 172800000).toISOString();
+      return res.json([
+        {
+          id: "mock-email-task-1",
+          emailId: "mock-msg-101",
+          from: "prof.johnson@university.edu",
+          subject: "Final Grading Rubric and Project Submission Deadline",
+          snippet: "Hi Team, please ensure that all final project files and live Cloud Run URLs are submitted by midnight tomorrow...",
+          detectedTask: {
+            title: "Submit final project and Cloud Run URL to Professor Johnson",
+            deadline: tomorrow,
+            priority: "high",
+            confidence: 0.95,
+            notes: "Extracted from Professor Johnson's email: 'all final project files and live Cloud Run URLs are submitted by midnight tomorrow'.",
+            emailSender: "prof.johnson@university.edu",
+            emailSubject: "Final Grading Rubric and Project Submission Deadline",
+            emailSnippet: "Hi Team, please ensure that all final project files and live Cloud Run URLs are submitted by midnight tomorrow..."
+          }
+        },
+        {
+          id: "mock-email-task-2",
+          emailId: "mock-msg-102",
+          from: "noreply@github.com",
+          subject: "[GitHub] Security Alert: Vulnerability found in dependency package",
+          snippet: "We found a high-severity security vulnerability in one of your project dependencies. Please patch the package immediately...",
+          detectedTask: {
+            title: "Resolve GitHub high-severity security alert for packages",
+            deadline: inTwoDays,
+            priority: "medium",
+            confidence: 0.88,
+            notes: "Extracted from GitHub security notification: 'high-severity security vulnerability in one of your project dependencies. Please patch the package immediately.'",
+            emailSender: "noreply@github.com",
+            emailSubject: "[GitHub] Security Alert: Vulnerability found in dependency package",
+            emailSnippet: "We found a high-severity security vulnerability in one of your project dependencies. Please patch the package immediately..."
+          }
+        }
+      ]);
+    }
+
     // List recent messages (max 20) in primary inbox
     const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=20&q=${encodeURIComponent('category:primary')}`;
     const listRes = await fetch(listUrl, {
@@ -1074,7 +1116,8 @@ app.post("/api/gmail/send-reply", async (req, res) => {
       replySubject = `Re: ${replySubject}`;
     }
 
-    if (demoMode) {
+    const isSimulatedToken = accessToken && (accessToken.startsWith("demo-") || accessToken.startsWith("mock-"));
+    if (demoMode || isSimulatedToken) {
       console.log(`[DEMO MODE] Would send email to ${cleanRecipient} with subject "${replySubject}":\n${body}`);
       return res.json({
         demo: true,

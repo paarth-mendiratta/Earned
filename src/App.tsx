@@ -188,6 +188,44 @@ export default function App() {
   // Auth/Google Calendar Sync Token
   const [calendarToken, setCalendarToken] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isAuthAttemptPending, setIsAuthAttemptPending] = useState<boolean>(false);
+  const authSuccessRef = useRef<boolean>(false);
+  const handleBypassCalendarRef = useRef<() => void>(() => {});
+
+  // Instantly cancel pending auth when the user closes/abandons the Google popup and returns to the app
+  useEffect(() => {
+    let focusTimeout: NodeJS.Timeout;
+    
+    const handleWindowFocus = () => {
+      if (isAuthAttemptPending) {
+        // Wait 1.2 seconds to allow any successful Firebase callback to register first
+        focusTimeout = setTimeout(() => {
+          if (isAuthAttemptPending && !authSuccessRef.current) {
+            setIsAuthAttemptPending(false);
+            setAuthError('Connection was closed or blocked. Google restricts testing-mode apps (Error 403). Please use the Sandbox Bypass to proceed!');
+            // Instantly trigger sandbox bypass
+            handleBypassCalendarRef.current();
+          }
+        }, 1200);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleWindowFocus();
+      }
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (focusTimeout) clearTimeout(focusTimeout);
+    };
+  }, [isAuthAttemptPending]);
 
   // Loaders/Modals
   const [isCheckinLoading, setIsCheckinLoading] = useState(false);
@@ -228,6 +266,52 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('earned_gmail_demomode', JSON.stringify(demoMode));
   }, [demoMode]);
+
+  // Automatically regenerate stale proposed calendar event slots that are in the past
+  useEffect(() => {
+    const now = Date.now();
+    let changed = false;
+    
+    // Check if any pending task has a suggested time slot that is in the past
+    const updatedTasks = tasks.map(task => {
+      if (task.status === 'pending' && task.suggestedTimeSlot) {
+        const startVal = new Date(task.suggestedTimeSlot.start).getTime();
+        // Check if start time is in the past (using a small margin of 5 seconds to avoid micro-flicker)
+        if (startVal < now - 5000) {
+          changed = true;
+          const deadlineTime = new Date(task.deadline).getTime();
+          let proposedStart = now + 4 * 60 * 60 * 1000; // 4 hrs from now
+          
+          if (proposedStart >= deadlineTime && deadlineTime > now) {
+            proposedStart = now + 10 * 60 * 1000; // 10 mins from now if deadline is close but in future
+          }
+          const proposedEnd = proposedStart + 1.5 * 60 * 60 * 1000; // 1.5 hr duration
+          
+          return {
+            ...task,
+            suggestedTimeSlot: {
+              start: new Date(proposedStart).toISOString(),
+              end: new Date(proposedEnd).toISOString(),
+            }
+          };
+        }
+      }
+      return task;
+    });
+
+    if (changed) {
+      setTasks(updatedTasks);
+      
+      const autoLog: ActivityLogEntry = {
+        id: `log-auto-schedule-refresh-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        type: 'schedule',
+        title: 'Stale Calendar Slot(s) Regenerated',
+        content: `The system detected and automatically regenerated stale past calendar slot suggestions into valid future slots.`,
+      };
+      setLogs(prev => [autoLog, ...prev]);
+    }
+  }, [tasks]);
 
   // Auth State Listener
   useEffect(() => {
@@ -476,13 +560,43 @@ export default function App() {
     }
   };
 
+  // Bypass Google Calendar authentication for sandbox testing
+  const handleBypassCalendar = () => {
+    const demoUser = {
+      uid: 'demo-user-123',
+      email: 'demo-hacker@gmail.com',
+      displayName: 'Hackathon Tester',
+      photoURL: ''
+    };
+    setUser(demoUser);
+    setCalendarToken('demo-mock-access-token');
+    setAuthError(null); // Clear any active auth error on bypass
+    setIsAuthAttemptPending(false); // Clear pending status
+    
+    const newLog: ActivityLogEntry = {
+      id: `log-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      type: 'schedule',
+      title: 'Demo Sync Active (Bypassed)',
+      content: 'Bypassed OAuth verification block. Sandbox simulation active with a mock Google Account.',
+      details: 'Account: demo-hacker@gmail.com\nSimulated Scopes: calendar, gmail'
+    };
+    setLogs(prev => [newLog, ...prev]);
+  };
+  handleBypassCalendarRef.current = handleBypassCalendar;
+
   // Connect Google Calendar (Firebase Sign-In)
   const handleConnectCalendar = async () => {
+    setIsAuthAttemptPending(true);
+    setAuthError(null);
+    authSuccessRef.current = false;
     try {
       const result = await googleSignIn();
       if (result) {
+        authSuccessRef.current = true;
         setUser(result.user);
         setCalendarToken(result.accessToken);
+        setAuthError(null); // Clear any active auth error on success
         
         // Log connection
         const newLog: ActivityLogEntry = {
@@ -495,9 +609,14 @@ export default function App() {
         };
         setLogs(prev => [newLog, ...prev]);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('OAuth window closed or failed to complete.');
+      // Automatically register the auth failure state to render in-app alert cards
+      setAuthError(err?.message || 'access_denied (Error 403)');
+      // Instantly trigger sandbox bypass on failure or popup closure with zero delay
+      handleBypassCalendar();
+    } finally {
+      setIsAuthAttemptPending(false);
     }
   };
 
@@ -654,13 +773,13 @@ export default function App() {
       if (exists) {
         return prev.map(t => t.id === taskId ? { 
           ...t, 
-          status: onTime ? 'done' : 'missed', 
+          status: 'done', 
           completedOnTime: onTime 
         } : t);
       } else if (fallbackTask) {
         return [{
           ...fallbackTask,
-          status: onTime ? 'done' : 'missed',
+          status: 'done',
           completedOnTime: onTime
         }, ...prev];
       }
@@ -669,7 +788,7 @@ export default function App() {
 
     // Handle Trust calculation
     // Completed on time adds +1 to trust score
-    // Late completions/misses subtract a massive amount (-4 to -5)
+    // Late completions subtract a massive amount (-4)
     const scoreChange = onTime ? 1 : -4;
     const previousScore = trustState.score;
     const nextScore = Math.max(0, previousScore + scoreChange);
@@ -700,7 +819,7 @@ export default function App() {
           id: `hist-${Date.now()}`,
           date: new Date().toISOString(),
           change: scoreChange,
-          reason: `Task "${targetTask.title}" resolved ${onTime ? 'on-time' : 'late/missed'}`,
+          reason: `Task "${targetTask.title}" resolved ${onTime ? 'on-time' : 'late'}`,
           previousLevel,
           newLevel: nextLevel
         },
@@ -715,7 +834,7 @@ export default function App() {
       id: `log-action-${Date.now()}`,
       timestamp: new Date().toISOString(),
       type: onTime ? 'draft' : 'trust_change',
-      title: `Task Resolved: ${onTime ? 'On-Time' : 'Late / Missed'}`,
+      title: `Task Resolved: ${onTime ? 'On-Time' : 'Late'}`,
       content: `User resolved "${targetTask.title}" ${onTime ? 'on-time' : 'after the deadline'}. Trust score: ${nextScore} XP (${scoreChange > 0 ? '+' : ''}${scoreChange}).`,
       details: `Resolution status: ${onTime ? 'On-Time' : 'Late'}\nPrevious score: ${previousScore}\nUpdated score: ${nextScore}`
     };
@@ -738,6 +857,104 @@ export default function App() {
         timestamp: new Date().toISOString(),
         type: 'trust_change',
         title: `AI Trust Core Capability ${nextLevel > previousLevel ? 'Elevated' : 'Regressed'}`,
+        content: explanationMessage,
+        details: `Previous Level: ${previousLevel}\nNew Level: ${nextLevel}\nScoring adjustment: ${scoreChange}`
+      };
+      logsAdded.push(changeLog);
+    }
+
+    setLogs(prev => [...logsAdded, ...prev]);
+    handleRefreshCheckin();
+  };
+
+  // Mark task as missed entirely (simulated)
+  const handleMissTask = async (taskId: string, fallbackTask?: Task) => {
+    const targetTask = tasks.find(t => t.id === taskId) || fallbackTask;
+    if (!targetTask) return;
+
+    // Update task
+    setTasks(prev => {
+      const exists = prev.some(t => t.id === taskId);
+      if (exists) {
+        return prev.map(t => t.id === taskId ? { 
+          ...t, 
+          status: 'missed', 
+          completedOnTime: false 
+        } : t);
+      } else if (fallbackTask) {
+        return [{
+          ...fallbackTask,
+          status: 'missed',
+          completedOnTime: false
+        }, ...prev];
+      }
+      return prev;
+    });
+
+    // Handle Trust calculation
+    // Missed deadline penalty is -5 XP
+    const scoreChange = -5;
+    const previousScore = trustState.score;
+    const nextScore = Math.max(0, previousScore + scoreChange);
+
+    const getLevelFromScore = (s: number): TrustLevel => {
+      if (s < 5) return 1;
+      if (s < 10) return 2;
+      if (s < 20) return 3;
+      if (s < 35) return 4;
+      return 5;
+    };
+
+    const nextLevel = getLevelFromScore(nextScore);
+    const hasLevelChanged = nextLevel !== trustState.level;
+    const previousLevel = trustState.level;
+
+    setTrustState(prev => ({
+      level: nextLevel,
+      score: nextScore,
+      history: [
+        {
+          id: `hist-${Date.now()}`,
+          date: new Date().toISOString(),
+          change: scoreChange,
+          reason: `Task "${targetTask.title}" missed deadline entirely`,
+          previousLevel,
+          newLevel: nextLevel
+        },
+        ...prev.history
+      ]
+    }));
+
+    // Generate log entries
+    const logsAdded: ActivityLogEntry[] = [];
+
+    const actionLog: ActivityLogEntry = {
+      id: `log-action-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      type: 'trust_change',
+      title: 'Deadline Missed Entirely',
+      content: `User marked "${targetTask.title}" as missed. Trust score: ${nextScore} XP (-5).`,
+      details: `Resolution status: Missed\nPrevious score: ${previousScore}\nUpdated score: ${nextScore}`
+    };
+    logsAdded.push(actionLog);
+
+    if (hasLevelChanged) {
+      const explanationMessage = getTrustChangeExplanation(previousLevel, nextLevel);
+
+      // Set the notification immediately to display instantly
+      setActiveNotification({
+        oldLevel: previousLevel,
+        newLevel: nextLevel,
+        message: explanationMessage
+      });
+
+      // Prepare trust change log instantly
+      const logId = `log-change-${Date.now()}`;
+      const changeLog: ActivityLogEntry = {
+        id: logId,
+        timestamp: new Date().toISOString(),
+        type: 'trust_change',
+        title: `AI Trust Core Capability Regressed`,
         content: explanationMessage,
         details: `Previous Level: ${previousLevel}\nNew Level: ${nextLevel}\nScoring adjustment: ${scoreChange}`
       };
@@ -1377,7 +1594,7 @@ export default function App() {
           id: `hist-${Date.now()}`,
           date: new Date().toISOString(),
           change: scoreChange,
-          reason: `Simulated task "${simTitle}" resolved late/missed`,
+          reason: `Simulated task "${simTitle}" resolved late`,
           previousLevel,
           newLevel: nextLevel
         },
@@ -1572,7 +1789,13 @@ export default function App() {
           <div className="hidden sm:flex items-center gap-3">
             {user ? (
               <div className="flex items-center gap-2 bg-[#131420] px-3.5 py-1.5 rounded-xl border border-[#1f2235]">
-                <img src={user.photoURL || ''} alt="Google" className="w-4 h-4 rounded-full border border-indigo-500/20" referrerPolicy="no-referrer" />
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt="Google" className="w-4 h-4 rounded-full border border-indigo-500/20" referrerPolicy="no-referrer" />
+                ) : (
+                  <span className="w-4 h-4 rounded-full bg-indigo-500/20 text-[9px] font-bold text-indigo-400 flex items-center justify-center border border-indigo-500/30 font-mono">
+                    {user.displayName ? user.displayName[0].toUpperCase() : 'U'}
+                  </span>
+                )}
                 <span className="text-xs text-slate-300 font-mono font-bold truncate max-w-32">{user.displayName || user.email}</span>
                 <button onClick={handleDisconnectCalendar} className="text-slate-400 hover:text-red-400 p-0.5 cursor-pointer transition-colors">
                   <LogOut className="w-3.5 h-3.5" />
@@ -1625,12 +1848,14 @@ export default function App() {
               dailyCheckin={dailyCheckin}
               isCheckinLoading={isCheckinLoading}
               onCompleteTask={handleCompleteTask}
+              onMissTask={handleMissTask}
               onDeleteTask={handleDeleteTask}
               onReorderTask={handleReorderTask}
               onMoveTask={handleMoveTask}
               onResetPriority={handleResetPriority}
               calendarToken={calendarToken}
               onConnectCalendar={handleConnectCalendar}
+              onBypassCalendar={handleBypassCalendar}
               onApproveSchedule={handleApproveSchedule}
               isScheduling={isScheduling}
               onGenerateDraft={handleGenerateDraft}
@@ -1643,6 +1868,9 @@ export default function App() {
               onSendEmailReply={handleSendEmailReply}
               isSendingEmail={isSendingEmail}
               demoMode={demoMode}
+              authError={authError}
+              onClearAuthError={() => setAuthError(null)}
+              isAuthAttemptPending={isAuthAttemptPending}
             />
           )}
 

@@ -109,7 +109,7 @@ export default function DemoControls({
                 >
                   <span className="flex items-center gap-2">
                     <Clock className="w-4 h-4 text-amber-400" />
-                    Complete Task Late (Missed)
+                    Complete Late
                   </span>
                   <span className="font-mono text-[9px] text-amber-300 font-bold bg-amber-900/30 px-2 py-0.5 rounded border border-amber-500/20">-4 Score</span>
                 </button>
@@ -121,7 +121,7 @@ export default function DemoControls({
                 >
                   <span className="flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 text-red-400" />
-                    Fail / Miss Deadline Entirely
+                    Missed Entirely
                   </span>
                   <span className="font-mono text-[9px] text-red-300 font-bold bg-red-900/30 px-2 py-0.5 rounded border border-red-500/20">-5 Score</span>
                 </button>

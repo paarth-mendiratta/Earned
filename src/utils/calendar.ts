@@ -7,6 +7,55 @@ import { CalendarEvent } from '../types';
 
 // Fetch the user's upcoming primary calendar events for today and tomorrow
 export async function fetchCalendarEvents(accessToken: string): Promise<CalendarEvent[]> {
+  if (accessToken && (accessToken.startsWith('demo-') || accessToken.startsWith('mock-'))) {
+    console.log('[Google Calendar API Simulation] Loading simulated events for sandbox mode.');
+    const now = new Date();
+    
+    // Event 1: Today afternoon
+    const start1 = new Date();
+    start1.setHours(13, 0, 0, 0);
+    const end1 = new Date();
+    end1.setHours(14, 0, 0, 0);
+    
+    // Event 2: Today late afternoon
+    const start2 = new Date();
+    start2.setHours(16, 30, 0, 0);
+    const end2 = new Date();
+    end2.setHours(17, 30, 0, 0);
+    
+    // Event 3: Tomorrow morning
+    const start3 = new Date();
+    start3.setDate(now.getDate() + 1);
+    start3.setHours(10, 0, 0, 0);
+    const end3 = new Date();
+    end3.setDate(now.getDate() + 1);
+    end3.setHours(11, 0, 0, 0);
+
+    return [
+      {
+        id: 'mock-evt-1',
+        summary: 'Sync with Engineering Lead',
+        start: { dateTime: start1.toISOString() },
+        end: { dateTime: end1.toISOString() },
+        description: 'Align on project deliverables and outstanding tasks [Simulated]'
+      },
+      {
+        id: 'mock-evt-2',
+        summary: 'Product Review & UX Alignment',
+        start: { dateTime: start2.toISOString() },
+        end: { dateTime: end2.toISOString() },
+        description: 'Go over new design prototypes [Simulated]'
+      },
+      {
+        id: 'mock-evt-3',
+        summary: 'Hackathon Final Submission Prep',
+        start: { dateTime: start3.toISOString() },
+        end: { dateTime: end3.toISOString() },
+        description: 'Review deployment URLs and final presentation slides [Simulated]'
+      }
+    ];
+  }
+
   try {
     const now = new Date();
     const timeMin = now.toISOString();
@@ -86,6 +135,17 @@ export async function createCalendarEvent(
   startIso: string,
   endIso: string
 ): Promise<any> {
+  if (accessToken && (accessToken.startsWith('demo-') || accessToken.startsWith('mock-'))) {
+    console.log('[Google Calendar API Simulation] Simulating successful calendar event insertion.');
+    return {
+      id: `mock-new-evt-${Date.now()}`,
+      summary,
+      description: `${description}\n\n[Synced by Earned AI Companion]`,
+      start: { dateTime: startIso },
+      end: { dateTime: endIso }
+    };
+  }
+
   try {
     const url = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
     const body = {
