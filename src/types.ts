@@ -3,6 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export interface SubTask {
+  id: string;
+  title: string;
+  completed: boolean;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -22,6 +28,9 @@ export interface Task {
   isPinned?: boolean;
   originalPosition?: number;
   originalAIRank?: number;
+  subtasks?: SubTask[];
+  subtasksCollapsed?: boolean;
+  subtasksRevealed?: boolean;
 }
 
 export type TrustLevel = 1 | 2 | 3 | 4 | 5;

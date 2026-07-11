@@ -9,7 +9,12 @@ import { Task } from '../types';
 import DateTimePicker from './DateTimePicker';
 
 interface AddTaskProps {
-  onAddTask: (task: Omit<Task, 'id' | 'status' | 'completedOnTime' | 'firstStep' | 'estimatedEffort'> & { firstStep: string; estimatedEffort: string }) => void;
+  onAddTask: (task: Omit<Task, 'id' | 'status' | 'completedOnTime' | 'firstStep' | 'estimatedEffort' | 'subtasks'> & { 
+    firstStep: string; 
+    estimatedEffort: string; 
+    isFallback?: boolean;
+    subtasks?: string[];
+  }) => void;
   level?: number;
 }
 
@@ -47,6 +52,7 @@ export default function AddTask({ onAddTask, level = 3 }: AddTaskProps) {
         firstStep: data.firstStep || 'Break the task down into minor actions.',
         estimatedEffort: data.estimatedEffort || '30 mins',
         isFallback: !!data.isFallback,
+        subtasks: data.subtasks,
       });
 
       // Reset form
@@ -65,6 +71,12 @@ export default function AddTask({ onAddTask, level = 3 }: AddTaskProps) {
         firstStep: 'Start by organizing your workplace and reading requirements.',
         estimatedEffort: '30 mins',
         isFallback: true,
+        subtasks: [
+          'Start by organizing your workplace and reading requirements.',
+          'Formulate an execution plan',
+          'Execute core work steps',
+          'Review outcomes and proofread'
+        ]
       });
       setTitle('');
       setNotes('');

@@ -17,6 +17,7 @@ import {
   X,
   Check,
   AlertTriangle,
+  AlertCircle,
   Cpu,
   RefreshCw,
   Award,
@@ -34,6 +35,27 @@ import Dashboard from './components/Dashboard';
 import Tree from './components/Tree';
 import Log from './components/Log';
 import DemoControls from './components/DemoControls';
+import LandingPage from './components/LandingPage';
+
+// Static subtasks for seed tasks
+const STATIC_SEED_SUBTASKS: Record<string, { id: string; title: string; completed: boolean }[]> = {
+  'seed-1': [
+    { id: 'subtask-seed-1-1', title: 'Outline the slide deck sections in a text document.', completed: false },
+    { id: 'subtask-seed-1-2', title: 'Draft Q3 goals, milestones, and resource projections.', completed: false },
+    { id: 'subtask-seed-1-3', title: 'Format slide visuals using clean typographic hierarchy.', completed: false },
+    { id: 'subtask-seed-1-4', title: 'Conduct a final proofread and timing practice run.', completed: false }
+  ],
+  'seed-2': [
+    { id: 'subtask-seed-2-1', title: 'Draft a bulleted email outlining the counter-proposals.', completed: false },
+    { id: 'subtask-seed-2-2', title: 'Check landlord reply for monthly rate discount approval.', completed: false },
+    { id: 'subtask-seed-2-3', title: 'Finalize renewal agreement dates and submit.', completed: false }
+  ],
+  'seed-3': [
+    { id: 'subtask-seed-3-1', title: 'Navigate to passport portal and check processing-time estimates.', completed: false },
+    { id: 'subtask-seed-3-2', title: 'Complete online details form and upload high-res photo.', completed: false },
+    { id: 'subtask-seed-3-3', title: 'Pay renewal application fee and save confirmation receipt.', completed: false }
+  ]
+};
 
 // Helper functions to generate fresh dynamic initial tasks and logs
 function getFreshInitialTasks(): Task[] {
@@ -50,7 +72,10 @@ function getFreshInitialTasks(): Task[] {
       suggestedTimeSlot: {
         start: new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(),
         end: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
-      }
+      },
+      subtasks: [...STATIC_SEED_SUBTASKS['seed-1']],
+      subtasksCollapsed: true,
+      subtasksRevealed: false
     },
     {
       id: 'seed-2',
@@ -64,7 +89,10 @@ function getFreshInitialTasks(): Task[] {
       suggestedTimeSlot: {
         start: new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString(),
         end: new Date(Date.now() + 25.5 * 60 * 60 * 1000).toISOString(),
-      }
+      },
+      subtasks: [...STATIC_SEED_SUBTASKS['seed-2']],
+      subtasksCollapsed: true,
+      subtasksRevealed: false
     },
     {
       id: 'seed-3',
@@ -75,6 +103,9 @@ function getFreshInitialTasks(): Task[] {
       firstStep: 'Navigate to passport portal and check processing-time estimates.',
       status: 'pending',
       completedOnTime: null,
+      subtasks: [...STATIC_SEED_SUBTASKS['seed-3']],
+      subtasksCollapsed: true,
+      subtasksRevealed: false
     }
   ];
 }
@@ -118,6 +149,9 @@ function parseEmailFromNotes(notes: string) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'tree' | 'logs'>('dashboard');
+  const [showLanding, setShowLanding] = useState<boolean>(() => {
+    return !sessionStorage.getItem('earned_has_seen_landing');
+  });
   
   const safeParse = <T,>(key: string, fallback: T): T => {
     const saved = localStorage.getItem(key);
@@ -135,18 +169,21 @@ export default function App() {
     const loaded = safeParse('earned_tasks', getFreshInitialTasks());
     let pendingCount = 0;
     return loaded.map(task => {
-      if (task.status === 'pending') {
+      const updated = { ...task };
+      const seedSubtasks = STATIC_SEED_SUBTASKS[task.id];
+      if (seedSubtasks && (!updated.subtasks || updated.subtasks.length === 0)) {
+        updated.subtasks = [...seedSubtasks];
+      }
+      if (updated.status === 'pending') {
         const currentPos = pendingCount++;
-        const updated = { ...task };
         if (updated.originalPosition === undefined) {
           updated.originalPosition = currentPos;
         }
         if (updated.originalAIRank === undefined) {
           updated.originalAIRank = currentPos;
         }
-        return updated;
       }
-      return task;
+      return updated;
     });
   });
 
@@ -180,6 +217,11 @@ export default function App() {
   const [isScanningEmails, setIsScanningEmails] = useState<boolean>(false);
   const [emailScanError, setEmailScanError] = useState<string | null>(null);
   const [isSendingEmail, setIsSendingEmail] = useState<string | null>(null);
+
+  const [subtaskBonusMessage, setSubtaskBonusMessage] = useState<string | null>(null);
+  const [breakingDownTaskIds, setBreakingDownTaskIds] = useState<Set<string>>(new Set());
+  const [lateCompletionPromptTask, setLateCompletionPromptTask] = useState<Task | null>(null);
+  const [dismissedLatePromptTaskIds, setDismissedLatePromptTaskIds] = useState<string[]>([]);
 
   const [dailyCheckin, setDailyCheckin] = useState<string>(() => {
     return localStorage.getItem('earned_checkin') || '';
@@ -242,6 +284,31 @@ export default function App() {
 
   const [activeReflection, setActiveReflection] = useState<string | null>(null);
 
+  // Reactive trigger to auto-complete parent tasks when all their subtasks are completed
+  useEffect(() => {
+    // Find any pending task that has subtasks and all subtasks are completed (completed: true)
+    const taskToAutoComplete = tasks.find(t => 
+      t.status === 'pending' && 
+      t.subtasks && 
+      t.subtasks.length > 0 && 
+      t.subtasks.every(st => st.completed)
+    );
+
+    if (taskToAutoComplete) {
+      const now = new Date();
+      const deadlineDate = new Date(taskToAutoComplete.deadline);
+      if (now < deadlineDate) {
+        // Auto-complete on-time! Passing taskToAutoComplete as fallbackTask so it has the latest checked-off subtasks state.
+        handleCompleteTask(taskToAutoComplete.id, true, taskToAutoComplete);
+      } else {
+        // Only trigger the choice modal if it isn't currently open for this task, and wasn't explicitly dismissed
+        if (lateCompletionPromptTask?.id !== taskToAutoComplete.id && !dismissedLatePromptTaskIds.includes(taskToAutoComplete.id)) {
+          setLateCompletionPromptTask(taskToAutoComplete);
+        }
+      }
+    }
+  }, [tasks, lateCompletionPromptTask, dismissedLatePromptTaskIds]);
+
   // Sync state to local storage
   useEffect(() => {
     localStorage.setItem('earned_tasks', JSON.stringify(tasks));
@@ -266,6 +333,15 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('earned_gmail_demomode', JSON.stringify(demoMode));
   }, [demoMode]);
+
+  useEffect(() => {
+    if (subtaskBonusMessage) {
+      const timer = setTimeout(() => {
+        setSubtaskBonusMessage(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [subtaskBonusMessage]);
 
   // Automatically regenerate stale proposed calendar event slots that are in the past
   useEffect(() => {
@@ -399,6 +475,7 @@ export default function App() {
     let firstStep = 'Break the task down into minor actions.';
     let estimatedEffort = '30 mins';
     let isStepFallback = !!emailTask.isFallback;
+    let emailSubtasks: string[] | undefined = undefined;
 
     try {
       const resStep = await fetch('/api/gemini/first-step', {
@@ -414,6 +491,7 @@ export default function App() {
         const stepData = await resStep.json();
         firstStep = stepData.firstStep || firstStep;
         estimatedEffort = stepData.estimatedEffort || estimatedEffort;
+        emailSubtasks = stepData.subtasks;
         if (stepData.isFallback) {
           isStepFallback = true;
         }
@@ -423,6 +501,14 @@ export default function App() {
     } catch (e) {
       console.warn('Failed to fetch customized first step from Gemini API, using defaults:', e);
       isStepFallback = true;
+    }
+
+    if (isStepFallback && !emailSubtasks) {
+      emailSubtasks = [
+        firstStep,
+        "Review content and formulate a comprehensive response",
+        "Perform necessary follow-ups and log completion"
+      ];
     }
 
     try {
@@ -460,7 +546,8 @@ export default function App() {
         firstStep,
         estimatedEffort,
         gmailMessageId: emailTask.id,
-        isFallback: isStepFallback
+        isFallback: isStepFallback,
+        subtasks: emailSubtasks
       });
 
       // Remove from detected list
@@ -721,14 +808,162 @@ export default function App() {
     }
   };
 
+  const handleBreakdownTask = async (taskId: string, title: string, notes: string, firstStep?: string) => {
+    try {
+      const response = await fetch('/api/gemini/breakdown', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, notes, firstStep }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch breakdown');
+      }
+      const data = await response.json();
+      if (data.subtasks && Array.isArray(data.subtasks)) {
+        const generatedSubtasks = data.subtasks.map((st: string, idx: number) => ({
+          id: `subtask-${taskId}-${idx}-${Date.now()}`,
+          title: st,
+          completed: false,
+        }));
+        
+        setTasks(prev => prev.map(t => t.id === taskId ? {
+          ...t,
+          subtasks: generatedSubtasks,
+          subtasksCollapsed: false,
+        } : t));
+      }
+    } catch (err) {
+      console.error('Error in automatic subtask breakdown:', err);
+    }
+  };
+
+  const handleManualBreakdown = async (taskId: string) => {
+    const targetTask = tasks.find(t => t.id === taskId);
+    if (!targetTask) return;
+
+    // Use pre-loaded subtasks if they exist or if it is a seed task
+    const staticSubtasks = STATIC_SEED_SUBTASKS[taskId];
+    if (staticSubtasks || (targetTask.subtasks && targetTask.subtasks.length > 0)) {
+      setTasks(prev => prev.map(t => t.id === taskId ? {
+        ...t,
+        subtasks: t.subtasks && t.subtasks.length > 0 ? t.subtasks : [...staticSubtasks],
+        subtasksRevealed: true,
+        subtasksCollapsed: false,
+      } : t));
+      return;
+    }
+
+    setBreakingDownTaskIds(prev => {
+      const next = new Set(prev);
+      next.add(taskId);
+      return next;
+    });
+
+    try {
+      const response = await fetch('/api/gemini/breakdown', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          title: targetTask.title, 
+          notes: targetTask.notes, 
+          firstStep: targetTask.firstStep 
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch breakdown');
+      }
+
+      const data = await response.json();
+      if (data.subtasks && Array.isArray(data.subtasks)) {
+        const generatedSubtasks = data.subtasks.map((st: string, idx: number) => ({
+          id: `subtask-${taskId}-${idx}-${Date.now()}`,
+          title: st,
+          completed: false,
+        }));
+
+        setTasks(prev => prev.map(t => t.id === taskId ? {
+          ...t,
+          subtasks: generatedSubtasks,
+          subtasksCollapsed: false,
+          subtasksRevealed: true,
+        } : t));
+      }
+    } catch (err) {
+      console.error('Failed to manually breakdown task:', err);
+    } finally {
+      setBreakingDownTaskIds(prev => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
+  const handleToggleSubtask = (taskId: string, subtaskId: string) => {
+    const targetTask = tasks.find(t => t.id === taskId);
+    if (!targetTask || !targetTask.subtasks) return;
+
+    const wasAllDoneBefore = targetTask.subtasks.every(st => st.completed);
+    const updatedSubtasks = targetTask.subtasks.map(st => {
+      if (st.id === subtaskId) {
+        return { ...st, completed: !st.completed };
+      }
+      return st;
+    });
+    const isAllDoneNow = updatedSubtasks.every(st => st.completed);
+
+    const updatedTask = { ...targetTask, subtasks: updatedSubtasks };
+
+    // Update tasks state
+    setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+
+    if (!wasAllDoneBefore && isAllDoneNow && targetTask.status === 'pending') {
+      const now = new Date();
+      const deadlineDate = new Date(targetTask.deadline);
+      if (now < deadlineDate) {
+        // Auto-complete on-time! Pass updatedTask as fallbackTask so handleCompleteTask gets the completed subtasks state
+        handleCompleteTask(taskId, true, updatedTask);
+      } else {
+        // Show choice modal
+        setLateCompletionPromptTask(updatedTask);
+      }
+    }
+  };
+
+  const handleToggleSubtasksCollapse = (taskId: string) => {
+    setTasks(prev => {
+      return prev.map(t => t.id === taskId ? {
+        ...t,
+        subtasksCollapsed: !t.subtasksCollapsed
+      } : t);
+    });
+  };
+
   // Add Task
-  const handleAddTask = (newTaskInfo: Omit<Task, 'id' | 'status' | 'completedOnTime' | 'firstStep' | 'estimatedEffort'> & { firstStep: string; estimatedEffort: string; isFallback?: boolean }) => {
+  const handleAddTask = (newTaskInfo: Omit<Task, 'id' | 'status' | 'completedOnTime' | 'firstStep' | 'estimatedEffort' | 'subtasks'> & { 
+    firstStep: string; 
+    estimatedEffort: string; 
+    isFallback?: boolean;
+    subtasks?: string[];
+  }) => {
+    const { subtasks, ...rest } = newTaskInfo;
     const task: Task = {
-      ...newTaskInfo,
+      ...rest,
       id: `task-${Date.now()}`,
       status: 'pending',
       completedOnTime: null,
     };
+
+    if (subtasks && subtasks.length > 0) {
+      task.subtasks = subtasks.map((st, idx) => ({
+        id: `subtask-${task.id}-${idx}-${Date.now()}`,
+        title: st,
+        completed: false,
+      }));
+      task.subtasksCollapsed = true;
+      task.subtasksRevealed = false;
+    }
 
     // Calculate a proposed schedule slot (Level 3+)
     if (trustState.level >= 3) {
@@ -764,7 +999,7 @@ export default function App() {
 
   // Complete task or fail deadline (simulated)
   const handleCompleteTask = async (taskId: string, onTime: boolean, fallbackTask?: Task) => {
-    const targetTask = tasks.find(t => t.id === taskId) || fallbackTask;
+    const targetTask = fallbackTask || tasks.find(t => t.id === taskId);
     if (!targetTask) return;
 
     // Update task
@@ -786,12 +1021,33 @@ export default function App() {
       return prev;
     });
 
+    // Check subtasks completion for XP bonus
+    const hasSubtasks = targetTask.subtasks && targetTask.subtasks.length > 0;
+    const allSubtasksDone = hasSubtasks && targetTask.subtasks!.every(st => st.completed);
+
     // Handle Trust calculation
-    // Completed on time adds +1 to trust score
+    // Completed on time adds +1 to trust score, +1 bonus if all subtasks done
     // Late completions subtract a massive amount (-4)
-    const scoreChange = onTime ? 1 : -4;
+    let scoreChange = 0;
+    let bonusEarned = false;
+    if (onTime) {
+      if (allSubtasksDone) {
+        scoreChange = 2; // +1 Base, +1 Bonus
+        bonusEarned = true;
+      } else {
+        scoreChange = 1;
+      }
+    } else {
+      scoreChange = -4;
+    }
+
     const previousScore = trustState.score;
     const nextScore = Math.max(0, previousScore + scoreChange);
+
+    // Show celebration/toast for the bonus XP
+    if (bonusEarned) {
+      setSubtaskBonusMessage(`All subtasks complete! +1 bonus XP earned for "${targetTask.title}" 🎉`);
+    }
 
     // Determine level change based on thresholds
     // Level 1: score < 5
@@ -819,7 +1075,7 @@ export default function App() {
           id: `hist-${Date.now()}`,
           date: new Date().toISOString(),
           change: scoreChange,
-          reason: `Task "${targetTask.title}" resolved ${onTime ? 'on-time' : 'late'}`,
+          reason: `Task "${targetTask.title}" resolved ${onTime ? 'on-time' : 'late'}${bonusEarned ? ' (Subtask Breakdown Completion Bonus +1 XP)' : ''}`,
           previousLevel,
           newLevel: nextLevel
         },
@@ -834,9 +1090,11 @@ export default function App() {
       id: `log-action-${Date.now()}`,
       timestamp: new Date().toISOString(),
       type: onTime ? 'draft' : 'trust_change',
-      title: `Task Resolved: ${onTime ? 'On-Time' : 'Late'}`,
-      content: `User resolved "${targetTask.title}" ${onTime ? 'on-time' : 'after the deadline'}. Trust score: ${nextScore} XP (${scoreChange > 0 ? '+' : ''}${scoreChange}).`,
-      details: `Resolution status: ${onTime ? 'On-Time' : 'Late'}\nPrevious score: ${previousScore}\nUpdated score: ${nextScore}`
+      title: bonusEarned ? 'Task & All Subtasks Resolved (+2 XP)' : `Task Resolved: ${onTime ? 'On-Time' : 'Late'}`,
+      content: bonusEarned
+        ? `User resolved "${targetTask.title}" on-time with 100% of subtasks completed! Base +1 XP and Bonus +1 XP credited. Trust score: ${nextScore} XP (+2).`
+        : `User resolved "${targetTask.title}" ${onTime ? 'on-time' : 'after the deadline'}. Trust score: ${nextScore} XP (${scoreChange > 0 ? '+' : ''}${scoreChange}).`,
+      details: `Resolution status: ${onTime ? 'On-Time' : 'Late'}\nSubtasks Bonus: ${bonusEarned ? 'Applied (+1 XP)' : 'None'}\nPrevious score: ${previousScore}\nUpdated score: ${nextScore}`
     };
     logsAdded.push(actionLog);
 
@@ -869,7 +1127,7 @@ export default function App() {
 
   // Mark task as missed entirely (simulated)
   const handleMissTask = async (taskId: string, fallbackTask?: Task) => {
-    const targetTask = tasks.find(t => t.id === taskId) || fallbackTask;
+    const targetTask = fallbackTask || tasks.find(t => t.id === taskId);
     if (!targetTask) return;
 
     // Update task
@@ -1719,17 +1977,31 @@ export default function App() {
     setDrafts({});
     setDetectedEmails([]);
     setDailyCheckin('');
+    setActiveTab('dashboard');
+    setShowLanding(true);
     
-    // 3. Clear and set local storage
+    // 3. Clear and set local storage & session storage
     localStorage.setItem('earned_tasks', JSON.stringify(freshTasks));
     localStorage.setItem('earned_trust', JSON.stringify({ level: 3, score: 12, history: [] }));
     localStorage.setItem('earned_logs', JSON.stringify(freshLogs));
     localStorage.setItem('earned_drafts', JSON.stringify({}));
     localStorage.removeItem('earned_checkin');
+    sessionStorage.removeItem('earned_has_seen_landing');
     
     // Clear resolving task IDs ref
     resolvingTaskIdsRef.current.clear();
   };
+
+  if (showLanding) {
+    return (
+      <LandingPage
+        onGetStarted={() => {
+          sessionStorage.setItem('earned_has_seen_landing', 'true');
+          setShowLanding(false);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#07080d] text-[#f4f4f5] font-sans selection:bg-indigo-500/20 selection:text-indigo-200">
@@ -1788,18 +2060,24 @@ export default function App() {
           {/* User Account / Sync info */}
           <div className="hidden sm:flex items-center gap-3">
             {user ? (
-              <div className="flex items-center gap-2 bg-[#131420] px-3.5 py-1.5 rounded-xl border border-[#1f2235]">
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt="Google" className="w-4 h-4 rounded-full border border-indigo-500/20" referrerPolicy="no-referrer" />
-                ) : (
-                  <span className="w-4 h-4 rounded-full bg-indigo-500/20 text-[9px] font-bold text-indigo-400 flex items-center justify-center border border-indigo-500/30 font-mono">
-                    {user.displayName ? user.displayName[0].toUpperCase() : 'U'}
-                  </span>
-                )}
-                <span className="text-xs text-slate-300 font-mono font-bold truncate max-w-32">{user.displayName || user.email}</span>
-                <button onClick={handleDisconnectCalendar} className="text-slate-400 hover:text-red-400 p-0.5 cursor-pointer transition-colors">
-                  <LogOut className="w-3.5 h-3.5" />
-                </button>
+              <div className="flex items-center gap-2.5">
+                <div className="hidden md:flex items-center gap-1.5 text-[9px] font-mono font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-500/25 px-2.5 py-1 rounded-lg">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>SECURELY SYNCED</span>
+                </div>
+                <div className="flex items-center gap-2 bg-[#131420] px-3.5 py-1.5 rounded-xl border border-[#1f2235]">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="Google" className="w-4 h-4 rounded-full border border-indigo-500/20" referrerPolicy="no-referrer" />
+                  ) : (
+                    <span className="w-4 h-4 rounded-full bg-indigo-500/20 text-[9px] font-bold text-indigo-400 flex items-center justify-center border border-indigo-500/30 font-mono">
+                      {user.displayName ? user.displayName[0].toUpperCase() : 'U'}
+                    </span>
+                  )}
+                  <span className="text-xs text-slate-300 font-mono font-bold truncate max-w-32">{user.displayName || user.email}</span>
+                  <button onClick={handleDisconnectCalendar} className="text-slate-400 hover:text-red-400 p-0.5 cursor-pointer transition-colors" title="Disconnect Google Workspace">
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             ) : (
               <button 
@@ -1871,6 +2149,10 @@ export default function App() {
               authError={authError}
               onClearAuthError={() => setAuthError(null)}
               isAuthAttemptPending={isAuthAttemptPending}
+              onBreakdownTask={handleManualBreakdown}
+              onToggleSubtask={handleToggleSubtask}
+              onToggleSubtasksCollapse={handleToggleSubtasksCollapse}
+              breakingDownTaskIds={breakingDownTaskIds}
             />
           )}
 
@@ -1971,6 +2253,93 @@ export default function App() {
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/80 focus:ring-offset-2 focus:ring-offset-[#12131a]"
                 >
                   Close Audit Report
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. SUBTASK BONUS CELEBRATION TOAST */}
+      {subtaskBonusMessage && (
+        <div id="subtask-bonus-toast" className="fixed bottom-6 right-6 z-50 flex items-center gap-3.5 bg-gradient-to-r from-emerald-950 via-[#0e1713] to-[#0e1713] border border-emerald-500/30 rounded-2xl p-4 shadow-[0_8px_32px_rgba(16,185,129,0.15)] animate-in slide-in-from-bottom-5 duration-300 max-w-sm">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex-shrink-0">
+            <Sparkles className="w-5 h-5 animate-pulse" />
+          </div>
+          <div className="flex-1 text-left">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-emerald-400 block mb-0.5">Bonus XP Credited</span>
+            <p className="text-xs text-slate-200 font-medium leading-normal">
+              {subtaskBonusMessage}
+            </p>
+          </div>
+          <button
+            onClick={() => setSubtaskBonusMessage(null)}
+            className="text-slate-400 hover:text-slate-200 transition-colors focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded-lg p-0.5"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* 4. LATE SUBTASK COMPLETION CHOICE PROMPT */}
+      {lateCompletionPromptTask && (
+        <div id="late-completion-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
+          <div className="bg-[#12131a] border border-[#26293b] rounded-2xl max-w-md w-full p-6 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200 text-left">
+            <button 
+              id="btn-close-late-prompt"
+              onClick={() => {
+                setDismissedLatePromptTaskIds(prev => [...prev, lateCompletionPromptTask.id]);
+                setLateCompletionPromptTask(null);
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/80 rounded-lg p-0.5"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-4 pt-2">
+              <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-amber-950/50 border border-amber-500/30">
+                <AlertCircle className="w-6 h-6 text-amber-400 animate-pulse" />
+              </div>
+
+              <div className="text-center space-y-1">
+                <span className="text-[10px] font-mono uppercase text-amber-400 font-bold tracking-widest block">
+                  Deadline Passed
+                </span>
+                <h3 className="font-display font-bold text-lg text-white">
+                  Action Plan Finished Late
+                </h3>
+                <p className="text-xs text-slate-400">
+                  You completed all subtasks for "{lateCompletionPromptTask.title}" after its deadline.
+                </p>
+              </div>
+
+              <p className="text-xs text-slate-300 bg-[#171822] border border-[#26283c] p-3.5 rounded-xl text-center leading-normal">
+                How would you like to log this task resolve?
+              </p>
+
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  id="btn-late-resolve-complete"
+                  onClick={() => {
+                    handleCompleteTask(lateCompletionPromptTask.id, false);
+                    setLateCompletionPromptTask(null);
+                  }}
+                  className="py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition-all cursor-pointer flex flex-col items-center justify-center gap-1 focus:outline-none focus:ring-2 focus:ring-indigo-500/80"
+                >
+                  <span className="font-semibold">Complete Late</span>
+                  <span className="text-[10px] font-normal text-indigo-200">-4 XP Penalty</span>
+                </button>
+
+                <button
+                  id="btn-late-resolve-missed"
+                  onClick={() => {
+                    handleMissTask(lateCompletionPromptTask.id);
+                    setLateCompletionPromptTask(null);
+                  }}
+                  className="py-2.5 px-4 bg-[#231518] hover:bg-[#341b20] text-red-400 border border-red-500/15 font-bold rounded-xl text-xs transition-all cursor-pointer flex flex-col items-center justify-center gap-1 focus:outline-none focus:ring-2 focus:ring-red-500/80"
+                >
+                  <span className="font-semibold">Mark as Missed</span>
+                  <span className="text-[10px] font-normal text-red-300/70">-5 XP Penalty</span>
                 </button>
               </div>
             </div>

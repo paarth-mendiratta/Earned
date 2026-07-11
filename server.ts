@@ -209,13 +209,16 @@ app.post("/api/gemini/first-step", async (req, res) => {
 
     const params: any = {
       model: "gemini-3.5-flash",
-      contents: `You are the inert-reducing first-step engine of "Earned" — an AI task companion.
+      contents: `You are the task intelligence and action planning engine of "Earned" — an AI task companion.
 For the task titled: "${title}"
 With additional notes: "${notes || 'No notes provided'}"
 
 Generate:
 1. A single concrete, bite-sized "first step" that takes less than 10 minutes to complete. Make it action-oriented, simple, and specific (e.g., "Find and open the renewal website" or "Draft the introductory paragraph", not vague like "Begin working").
 2. An estimated effort/complexity label (e.g. "15 mins", "45 mins", "2 hours", "4 hours").
+3. A sequence of 3 to 5 progressive, logical, and concrete subtask titles that together complete the main task. The first subtask in this array should match or closely align with the "firstStep" you generate, and the subsequent subtasks must map out the remaining steps to finish the task.
+
+Each subtask must be a small, concrete, and highly actionable checklist item.
 
 ${isFactualOrTimeSensitive ? "Note: This task may involve factual or real-world timelines. Ground your response using real search results if relevant." : ""}`,
       config: {
@@ -230,9 +233,14 @@ ${isFactualOrTimeSensitive ? "Note: This task may involve factual or real-world 
             estimatedEffort: {
               type: Type.STRING,
               description: "The estimated total effort/complexity level (e.g. '15 mins', '45 mins', '2 hours', '4 hours')."
+            },
+            subtasks: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "An array of 3 to 5 progressive, logical, and concrete subtask titles that complete the parent task, with the first subtask corresponding to the firstStep."
             }
           },
-          required: ["firstStep", "estimatedEffort"]
+          required: ["firstStep", "estimatedEffort", "subtasks"]
         }
       }
     };
@@ -254,28 +262,175 @@ ${isFactualOrTimeSensitive ? "Note: This task may involve factual or real-world 
     const combined = ((title || "") + " " + (notes || "")).toLowerCase();
     let firstStep = "Identify immediate next actions and prepare required materials.";
     let estimatedEffort = "30 mins";
+    let subtasks: string[] = [];
     
     if (combined.includes("email") || combined.includes("reply") || combined.includes("message") || combined.includes("contact")) {
       firstStep = "Draft a direct and professional reply message in a scratchpad or notepad.";
       estimatedEffort = "15 mins";
+      subtasks = [
+        firstStep,
+        "Review tone, correctness, and recipient address",
+        "Send the message and confirm delivery"
+      ];
     } else if (combined.includes("presentation") || combined.includes("slides") || combined.includes("ppt") || combined.includes("deck")) {
       firstStep = "Open a blank slide deck and define the 3 main points/takeaways you want to deliver.";
       estimatedEffort = "45 mins";
+      subtasks = [
+        firstStep,
+        "Outline the core narrative and main slides",
+        "Draft the content and insert required assets",
+        "Proofread and present a test run"
+      ];
     } else if (combined.includes("renew") || combined.includes("lease") || combined.includes("apply") || combined.includes("passport")) {
       firstStep = "Locate and open the official online portal or login screen to check current application instructions.";
       estimatedEffort = "30 mins";
+      subtasks = [
+        firstStep,
+        "Gather all necessary documentation and ID materials",
+        "Complete the application form and verify fields",
+        "Submit the application and pay any required fees"
+      ];
     } else if (combined.includes("study") || combined.includes("learn") || combined.includes("read") || combined.includes("calculus") || combined.includes("exam")) {
       firstStep = "Open the target textbook, syllabus, or learning material to the relevant chapter or section.";
       estimatedEffort = "45 mins";
+      subtasks = [
+        firstStep,
+        "Review key notes and highlight core concepts",
+        "Complete practice questions or exercises",
+        "Self-test or summarize takeaways"
+      ];
     } else if (combined.includes("workout") || combined.includes("gym") || combined.includes("run") || combined.includes("exercise")) {
       firstStep = "Change into athletic clothing and prepare a full water bottle.";
       estimatedEffort = "45 mins";
+      subtasks = [
+        firstStep,
+        "Perform a thorough warm-up and stretching routine",
+        "Execute the core training/exercise session",
+        "Cool down and log the completed activity"
+      ];
     } else if (combined.includes("invoice") || combined.includes("bill") || combined.includes("pay") || combined.includes("tax")) {
       firstStep = "Retrieve the statement document and pull up your banking app or payment interface.";
       estimatedEffort = "15 mins";
+      subtasks = [
+        firstStep,
+        "Verify the amount and billing details",
+        "Execute the payment transaction successfully",
+        "Save the confirmation receipt for records"
+      ];
+    } else {
+      subtasks = [
+        firstStep,
+        `Execute the primary steps of "${title}"`,
+        "Conduct a final review of the outcome",
+        "Mark the task as completed and update records"
+      ];
     }
     
-    res.json({ firstStep, estimatedEffort, isFallback: true });
+    res.json({ firstStep, estimatedEffort, subtasks, isFallback: true });
+  }
+});
+
+// 3. Subtask Breakdown Endpoint
+app.post("/api/gemini/breakdown", async (req, res) => {
+  let title = "";
+  let notes = "";
+  let firstStep = "";
+  try {
+    const body = req.body || {};
+    title = body.title;
+    notes = body.notes;
+    firstStep = body.firstStep;
+    if (!title) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+
+    const contents = `You are the subtask breakdown engine of "Earned" — an AI task companion.
+For the task titled: "${title}"
+With additional notes: "${notes || 'No notes provided'}"
+${firstStep ? `And a suggested first step: "${firstStep}"` : ''}
+
+If a first step is provided, make that the first subtask exactly or slightly rephrased (but keep the core concept of the first step), and then generate 2-4 additional progressive, logical, and concrete subtasks that together complete the main task.
+If no first step is provided, generate 3-5 progressive, logical, and concrete subtasks that together complete the main task.
+
+Each subtask must be a small, concrete, and highly actionable checklist item.
+
+Return a list of subtasks.`;
+
+    const response = await generateContentWithRetry({
+      model: "gemini-3.5-flash",
+      contents: contents,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            subtasks: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "An array of 3 to 5 clear, concrete, progressive, actionable subtask titles."
+            }
+          },
+          required: ["subtasks"]
+        }
+      }
+    });
+
+    const resultText = response.text;
+    if (!resultText) {
+      throw new Error("No response from Gemini API");
+    }
+
+    res.json(parseJSONResponse(resultText));
+  } catch (error: any) {
+    handleEndpointError("Subtask Breakdown", error);
+    
+    // Offline/rule-based fallback
+    const combined = ((title || "") + " " + (notes || "")).toLowerCase();
+    let subtasks: string[] = [];
+
+    if (firstStep) {
+      subtasks.push(firstStep);
+    } else {
+      subtasks.push(`Research and prepare for "${title}"`);
+    }
+
+    if (combined.includes("email") || combined.includes("reply") || combined.includes("message") || combined.includes("contact")) {
+      subtasks.push("Draft the message in a notepad or scratchpad");
+      subtasks.push("Review tone, correctness, and recipient address");
+      subtasks.push("Send the message and confirm delivery");
+    } else if (combined.includes("presentation") || combined.includes("slides") || combined.includes("ppt") || combined.includes("deck")) {
+      subtasks.push("Outline the core narrative and main slides");
+      subtasks.push("Draft the content and insert required assets");
+      subtasks.push("Proofread and present a test run");
+    } else if (combined.includes("renew") || combined.includes("lease") || combined.includes("apply") || combined.includes("passport")) {
+      subtasks.push("Gather all necessary documentation and ID materials");
+      subtasks.push("Complete the application form and verify fields");
+      subtasks.push("Submit the application and pay any required fees");
+    } else if (combined.includes("study") || combined.includes("learn") || combined.includes("read") || combined.includes("calculus") || combined.includes("exam")) {
+      subtasks.push("Review key notes and highlight core concepts");
+      subtasks.push("Complete practice questions or exercises");
+      subtasks.push("Self-test or summarize takeaways");
+    } else if (combined.includes("workout") || combined.includes("gym") || combined.includes("run") || combined.includes("exercise")) {
+      subtasks.push("Perform a thorough warm-up and stretching routine");
+      subtasks.push("Execute the core training/exercise session");
+      subtasks.push("Cool down and log the completed activity");
+    } else if (combined.includes("invoice") || combined.includes("bill") || combined.includes("pay") || combined.includes("tax")) {
+      subtasks.push("Verify the amount and billing details");
+      subtasks.push("Execute the payment transaction successfully");
+      subtasks.push("Save the confirmation receipt for records");
+    } else {
+      subtasks.push(`Execute the primary steps of "${title}"`);
+      subtasks.push("Conduct a final review of the outcome");
+      subtasks.push("Mark the task as completed and update records");
+    }
+
+    if (subtasks.length < 3) {
+      subtasks.push("Review and finalize the results");
+    }
+    
+    // Ensure uniqueness and slice to max 5
+    const uniqueSubtasks = Array.from(new Set(subtasks)).slice(0, 5);
+    res.json({ subtasks: uniqueSubtasks, isFallback: true });
   }
 });
 
@@ -708,42 +863,76 @@ app.post("/api/gmail/detect-tasks", async (req, res) => {
 
     if (accessToken.startsWith("demo-") || accessToken.startsWith("mock-")) {
       console.log("[Gmail API Simulation] Generating simulated tasks from mock emails.");
-      const tomorrow = new Date(Date.now() + 86400000).toISOString();
-      const inTwoDays = new Date(Date.now() + 172800000).toISOString();
+      const now = new Date();
+      
+      // Calculate realistic relative dates for email received timestamp
+      const dateStr1 = new Date(now.getTime() - 2 * 3600000).toUTCString(); // 2 hours ago
+      const dateStr2 = new Date(now.getTime() - 5 * 3600000).toUTCString(); // 5 hours ago
+      const dateStr3 = new Date(now.getTime() - 24 * 3600000).toUTCString(); // 1 day ago
+      const dateStr4 = new Date(now.getTime() - 36 * 3600000).toUTCString(); // 1.5 days ago
+
+      // Calculate future deadlines
+      const tomorrowDate = new Date(now.getTime() + 86400000);
+      const tomorrowStr = tomorrowDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + " (Tomorrow)";
+      
+      const inThreeDaysDate = new Date(now.getTime() + 3 * 86400000);
+      const inThreeDaysStr = inThreeDaysDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      
+      const nextMondayDate = new Date(now.getTime() + 5 * 86400000);
+      const nextMondayStr = nextMondayDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
       return res.json([
         {
           id: "mock-email-task-1",
-          emailId: "mock-msg-101",
-          from: "prof.johnson@university.edu",
-          subject: "Final Grading Rubric and Project Submission Deadline",
-          snippet: "Hi Team, please ensure that all final project files and live Cloud Run URLs are submitted by midnight tomorrow...",
-          detectedTask: {
-            title: "Submit final project and Cloud Run URL to Professor Johnson",
-            deadline: tomorrow,
-            priority: "high",
-            confidence: 0.95,
-            notes: "Extracted from Professor Johnson's email: 'all final project files and live Cloud Run URLs are submitted by midnight tomorrow'.",
-            emailSender: "prof.johnson@university.edu",
-            emailSubject: "Final Grading Rubric and Project Submission Deadline",
-            emailSnippet: "Hi Team, please ensure that all final project files and live Cloud Run URLs are submitted by midnight tomorrow..."
-          }
+          threadId: "mock-thread-101",
+          from: "Sarah Chen <sarah.chen@innovate-tech.com>",
+          subject: "Urgent: Action Required - Mobile App UX Mockups Feedback",
+          date: dateStr1,
+          extractedTitle: "Review mobile app UX mockups and send feedback to Sarah",
+          extractedDeadline: tomorrowStr,
+          reason: "Sarah explicitly requested feedback on the newly attached Figma mockups before the client sync tomorrow.",
+          bodySnippet: "Hey there! I just uploaded the v2 mobile app UX prototypes to Figma. Could you please review the navigation layout and leave your comments/feedback by tomorrow afternoon? The client presentation is scheduled for Thursday morning so we need to lock this down. Thanks!",
+          originalBody: "Hey there! I just uploaded the v2 mobile app UX prototypes to Figma. Could you please review the navigation layout and leave your comments/feedback by tomorrow afternoon? The client presentation is scheduled for Thursday morning so we need to lock this down. Thanks!",
+          draftedReply: "Hi Sarah,\n\nThanks for sending over the v2 prototypes! I've completed the review of the navigation layout and left detailed feedback and comments directly on the Figma cards.\n\nOverall, the flow is incredibly smooth. I made a few minor suggestions regarding the spacing on the dashboard widget, but everything looks ready for the client presentation tomorrow morning.\n\nBest,\n[Your Name]"
         },
         {
           id: "mock-email-task-2",
-          emailId: "mock-msg-102",
-          from: "noreply@github.com",
-          subject: "[GitHub] Security Alert: Vulnerability found in dependency package",
-          snippet: "We found a high-severity security vulnerability in one of your project dependencies. Please patch the package immediately...",
-          detectedTask: {
-            title: "Resolve GitHub high-severity security alert for packages",
-            deadline: inTwoDays,
-            priority: "medium",
-            confidence: 0.88,
-            notes: "Extracted from GitHub security notification: 'high-severity security vulnerability in one of your project dependencies. Please patch the package immediately.'",
-            emailSender: "noreply@github.com",
-            emailSubject: "[GitHub] Security Alert: Vulnerability found in dependency package",
-            emailSnippet: "We found a high-severity security vulnerability in one of your project dependencies. Please patch the package immediately..."
-          }
+          threadId: "mock-thread-102",
+          from: "Billing Dept <billing@aws-cloud-partner.net>",
+          subject: "Invoice #2026-8849 Pending Payment (Due in 3 Days)",
+          date: dateStr2,
+          extractedTitle: "Process AWS partner invoice #2026-8849 payment",
+          extractedDeadline: inThreeDaysStr,
+          reason: "Payment reminder for invoice #2026-8849, due in three days.",
+          bodySnippet: "Dear Customer, this is a friendly reminder that invoice #2026-8849 for cloud consulting and support services rendered is due on your account in three days. The total outstanding balance is $1,420.00. Please process payment via bank transfer or credit card using the secure portal link below.",
+          originalBody: "Dear Customer, this is a friendly reminder that invoice #2026-8849 for cloud consulting and support services rendered is due on your account in three days. The total outstanding balance is $1,420.00. Please process payment via bank transfer or credit card using the secure portal link below.",
+          draftedReply: "Hi Billing Team,\n\nThanks for the payment reminder. I have received Invoice #2026-8849 and have submitted it to our finance department for processing.\n\nWe will initiate the bank transfer today, and the outstanding balance of $1,420.00 should clear on your end within the next 24-48 hours.\n\nBest regards,\n[Your Name]"
+        },
+        {
+          id: "mock-email-task-3",
+          threadId: "mock-thread-103",
+          from: "Marcus Vance <marcus.vance@apex-creative.com>",
+          subject: "RE: Project Helios Content Deliverables Status Check",
+          date: dateStr3,
+          extractedTitle: "Deliver Project Helios copywriting copy deck to Marcus",
+          extractedDeadline: nextMondayStr,
+          reason: "Marcus is asking for the finalized copywriting deck ahead of next week's design sprint.",
+          bodySnippet: "Hi! Just checking in on the copywriting copy deck for the Helios landing page. We need to hand this off to the development team on Monday morning to kick off the design sprint. Do you think you'll have the draft ready for a final review by Friday afternoon? Let me know if you need any additional brand assets.",
+          originalBody: "Hi! Just checking in on the copywriting copy deck for the Helios landing page. We need to hand this off to the development team on Monday morning to kick off the design sprint. Do you think you'll have the draft ready for a final review by Friday afternoon? Let me know if you need any additional brand assets.",
+          draftedReply: "Hi Marcus,\n\nThanks for checking in! Yes, the copywriting copy deck for the Helios landing page is coming along nicely. I am finalizing the primary hero headings and body sections today.\n\nI will send over the complete copy deck for your final review by Friday afternoon, well ahead of the Monday morning design sprint.\n\nBest,\n[Your Name]"
+        },
+        {
+          id: "mock-email-task-4",
+          threadId: "mock-thread-104",
+          from: "Elena Rostova <elena.rostova@global-solutions.org>",
+          subject: "Request for Q3 Strategic Advisory Call",
+          date: dateStr4,
+          extractedTitle: "Schedule and prepare agenda for Elena's Q3 Strategic Advisory Call",
+          extractedDeadline: "Not mentioned",
+          reason: "Elena requested a strategic planning call to align on Q3 goals, proposing to coordinate a slot.",
+          bodySnippet: "Hi, hope you are doing well. I would like to schedule our Q3 strategic advisory call sometime next week. We have several crucial expansion plans to align on and would love your advisory input. Please let me know your availability so we can coordinate a calendar slot. I have attached the draft agenda outline.",
+          originalBody: "Hi, hope you are doing well. I would like to schedule our Q3 strategic advisory call sometime next week. We have several crucial expansion plans to align on and would love your advisory input. Please let me know your availability so we can coordinate a calendar slot. I have attached the draft agenda outline.",
+          draftedReply: "Hi Elena,\n\nGreat to hear from you! Yes, coordinating a Q3 strategic advisory call next week sounds perfect. We have some exciting progress to share.\n\nI am generally free next Tuesday afternoon or Thursday morning. Please let me know if either of those slots works for your calendar, and I'll send over an invite with the agenda outline attached.\n\nBest,\n[Your Name]"
         }
       ]);
     }
