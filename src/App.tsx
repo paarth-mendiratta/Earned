@@ -789,9 +789,12 @@ export default function App() {
     } catch (err: any) {
       console.error(err);
       // Automatically register the auth failure state to render in-app alert cards
-      setAuthError(err?.message || 'access_denied (Error 403)');
-      // Instantly trigger sandbox bypass on failure or popup closure with zero delay
-      handleBypassCalendar();
+      const msg = err?.message || String(err);
+      if (msg.includes('popup-closed-by-user')) {
+        setAuthError('The Google sign-in popup was closed before completing connection.');
+      } else {
+        setAuthError(msg || 'access_denied (Error 403)');
+      }
     } finally {
       setIsAuthAttemptPending(false);
     }

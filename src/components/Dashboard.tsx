@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   ShieldAlert, 
   Sparkles, 
@@ -184,6 +185,89 @@ export default function Dashboard({
   const [editedStartTimes, setEditedStartTimes] = useState<Record<string, string>>({});
   const [editedEndTimes, setEditedEndTimes] = useState<Record<string, string>>({});
 
+  // Local animating tasks for smooth transition animations
+  const [animatingTasks, setAnimatingTasks] = useState<Record<string, {
+    type: 'complete' | 'late' | 'missed';
+    phase: 'flash' | 'icon' | 'exit';
+  }>>({});
+
+  const [floatingXPs, setFloatingXPs] = useState<Array<{ id: string; text: string; colorClass: string }>>([]);
+  const prevScoreRef = React.useRef(trustState.score);
+
+  useEffect(() => {
+    const diff = trustState.score - prevScoreRef.current;
+    if (diff !== 0) {
+      const text = diff > 0 ? `+${diff} XP` : `${diff} XP`;
+      const colorClass = diff > 0 
+        ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/30' 
+        : diff === -4 
+          ? 'text-amber-400 bg-amber-950/40 border border-amber-500/30' 
+          : 'text-rose-400 bg-rose-950/40 border border-rose-500/30';
+      const id = `xp-${Date.now()}`;
+      setFloatingXPs(prev => [...prev, { id, text, colorClass }]);
+      setTimeout(() => {
+        setFloatingXPs(prev => prev.filter(item => item.id !== id));
+      }, 1000);
+    }
+    prevScoreRef.current = trustState.score;
+  }, [trustState.score]);
+
+  const triggerTaskAnimation = (
+    taskId: string,
+    type: 'complete' | 'late' | 'missed',
+    actionFn: () => void
+  ) => {
+    // 1. Immediately (0ms) set phase to 'flash'
+    setAnimatingTasks(prev => ({
+      ...prev,
+      [taskId]: { type, phase: 'flash' }
+    }));
+
+    // 2. At 200ms, transition to 'icon'
+    setTimeout(() => {
+      setAnimatingTasks(prev => {
+        if (!prev[taskId]) return prev;
+        return {
+          ...prev,
+          [taskId]: { ...prev[taskId], phase: 'icon' }
+        };
+      });
+    }, 200);
+
+    // 3. At 500ms, transition to 'exit'
+    setTimeout(() => {
+      setAnimatingTasks(prev => {
+        if (!prev[taskId]) return prev;
+        return {
+          ...prev,
+          [taskId]: { ...prev[taskId], phase: 'exit' }
+        };
+      });
+    }, 500);
+
+    // 4. At 900ms, complete animation and trigger parent action
+    setTimeout(() => {
+      setAnimatingTasks(prev => {
+        const updated = { ...prev };
+        delete updated[taskId];
+        return updated;
+      });
+      actionFn();
+    }, 900);
+  };
+
+  const handleAnimateCompleteOnTime = (taskId: string) => {
+    triggerTaskAnimation(taskId, 'complete', () => onCompleteTask(taskId, true));
+  };
+
+  const handleAnimateCompleteLate = (taskId: string) => {
+    triggerTaskAnimation(taskId, 'late', () => onCompleteTask(taskId, false));
+  };
+
+  const handleAnimateMiss = (taskId: string) => {
+    triggerTaskAnimation(taskId, 'missed', () => onMissTask(taskId));
+  };
+
   const pendingTasks = tasks.filter((t) => t.status === 'pending');
   const historyTasks = tasks
     .filter((t) => t.status === 'done' || t.status === 'missed')
@@ -272,16 +356,48 @@ export default function Dashboard({
     const isEndBeforeStart = (startVal && endVal) ? new Date(endVal) <= new Date(startVal) : false;
     const isInvalidTime = isTimeInPast || isEndBeforeStart;
 
+    const animation = animatingTasks[task.id];
+    let borderClass = '';
+    let animStyle: React.CSSProperties = {};
+
+    if (animation) {
+      const { type, phase } = animation;
+      if (phase === 'flash' || phase === 'icon') {
+        if (type === 'complete') {
+          borderClass = 'ring-2 ring-emerald-500 border-emerald-500 bg-emerald-950/15 shadow-[0_0_20px_rgba(16,185,129,0.3)]';
+        } else if (type === 'late') {
+          borderClass = 'ring-2 ring-amber-500 border-amber-500 bg-amber-950/15 shadow-[0_0_20px_rgba(245,158,11,0.3)]';
+        } else if (type === 'missed') {
+          borderClass = 'ring-2 ring-red-500 border-red-500 bg-red-950/15 shadow-[0_0_20px_rgba(239,68,68,0.3)]';
+        }
+      }
+      if (phase === 'exit') {
+        animStyle = {
+          transform: 'translateY(-20px)',
+          opacity: 0,
+          transition: 'transform 400ms cubic-bezier(0.16, 1, 0.3, 1), opacity 400ms ease-out',
+          pointerEvents: 'none',
+        };
+      } else {
+        animStyle = {
+          transition: 'all 200ms ease-out',
+        };
+      }
+    }
+
     return (
       <div
         key={task.id}
         id={`task-card-${task.id}`}
-        className={`bg-[#12131a] border rounded-2xl p-5 md:p-6 transition-all duration-200 relative overflow-hidden ${
-          task.status !== 'pending' 
-            ? 'opacity-55 border-[#212332] bg-[#12131a]/60 shadow-xs' : 
-          isOverdue 
-            ? 'border-red-950 border-l-4 border-l-red-500 bg-gradient-to-b from-red-950/10 to-[#12131a] shadow-[0_2px_12px_rgba(239,68,68,0.02)]' : 
-            'border-[#212332] border-l-4 border-l-indigo-500 hover:border-[#31344a] hover:shadow-md'
+        style={animStyle}
+        className={`bg-[#12131a] border rounded-2xl p-5 md:p-6 transition-all relative overflow-hidden ${
+          animation ? borderClass : (
+            task.status !== 'pending' 
+              ? 'opacity-55 border-[#212332] bg-[#12131a]/60 shadow-xs' : 
+            isOverdue 
+              ? 'border-red-950 border-l-4 border-l-red-500 bg-gradient-to-b from-red-950/10 to-[#12131a] shadow-[0_2px_12px_rgba(239,68,68,0.02)]' : 
+              'border-[#212332] border-l-4 border-l-indigo-500 hover:border-[#31344a] hover:shadow-md'
+          )
         }`}
       >
         {/* Priority & Top Badge */}
@@ -702,7 +818,7 @@ export default function Dashboard({
                 {isDeadlineInFuture && (
                   <button
                     id={`btn-complete-ontime-${task.id}`}
-                    onClick={() => onCompleteTask(task.id, true)}
+                    onClick={() => handleAnimateCompleteOnTime(task.id)}
                     className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer shadow-xs"
                   >
                     <Check className="w-3.5 h-3.5" />
@@ -714,14 +830,14 @@ export default function Dashboard({
                   <>
                     <button
                       id={`btn-complete-late-${task.id}`}
-                      onClick={() => onCompleteTask(task.id, false)}
+                      onClick={() => handleAnimateCompleteLate(task.id)}
                       className="px-2.5 py-1.5 text-xs text-amber-400 border border-amber-500/20 bg-amber-950/20 hover:bg-amber-950/40 rounded-xl transition-all cursor-pointer font-bold animate-in fade-in duration-200"
                     >
                       Mark Late
                     </button>
                     <button
                       id={`btn-mark-missed-${task.id}`}
-                      onClick={() => onMissTask(task.id)}
+                      onClick={() => handleAnimateMiss(task.id)}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer shadow-xs animate-in fade-in duration-200"
                     >
                       <AlertTriangle className="w-3.5 h-3.5" />
@@ -741,6 +857,55 @@ export default function Dashboard({
             </div>
           );
         })()}
+
+        {/* Satisfying overlay icon entrance */}
+        {animation && (animation.phase === 'icon' || animation.phase === 'exit') && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="absolute inset-0 flex items-center justify-center bg-[#12131a]/90 backdrop-blur-xs z-50 pointer-events-none"
+          >
+            {animation.type === 'complete' && (
+              <motion.div 
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="flex flex-col items-center gap-1"
+              >
+                <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.15)]">
+                  <Check className="w-8 h-8 stroke-[3]" />
+                </div>
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 mt-2">Completed On-Time</span>
+              </motion.div>
+            )}
+            {animation.type === 'late' && (
+              <motion.div 
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="flex flex-col items-center gap-1"
+              >
+                <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-full text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
+                  <Check className="w-8 h-8 stroke-[3]" />
+                </div>
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400 mt-2">Marked Late</span>
+              </motion.div>
+            )}
+            {animation.type === 'missed' && (
+              <motion.div 
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="flex flex-col items-center gap-1"
+              >
+                <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-full text-rose-400 shadow-[0_0_20px_rgba(239,68,68,0.15)]">
+                  <span className="text-3xl font-bold font-mono select-none leading-none">✗</span>
+                </div>
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-rose-400 mt-2">Marked Missed</span>
+              </motion.div>
+            )}
+          </motion.div>
+        )}
       </div>
     );
   };
@@ -777,10 +942,10 @@ export default function Dashboard({
       {/* 1. Prominent Trust Score Header Card (Signature Visual Moment) */}
       <div 
         id="trust-indicator-card" 
-        className={`p-6 rounded-2xl border ${getLevelBorder(trustState.level)} transition-all duration-300 relative overflow-hidden`}
+        className={`p-6 rounded-2xl border ${getLevelBorder(trustState.level)} transition-all duration-300 relative`}
       >
         {/* Subtle decorative grid background */}
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff03_1px,transparent_1px),linear-gradient(to_bottom,#ffffff03_1px,transparent_1px)] bg-[size:14px_24px] pointer-events-none" />
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff03_1px,transparent_1px),linear-gradient(to_bottom,#ffffff03_1px,transparent_1px)] bg-[size:14px_24px] pointer-events-none rounded-2xl overflow-hidden" />
         
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5 text-left">
           <div className="space-y-1.5">
@@ -800,7 +965,21 @@ export default function Dashboard({
             </h1>
           </div>
           <div className="flex-shrink-0 flex items-center gap-3">
-            <div className="bg-[#12131a]/80 backdrop-blur-xs border border-slate-800 p-3 rounded-xl text-center md:text-right shadow-xs min-w-36">
+            <div className="bg-[#12131a]/80 backdrop-blur-xs border border-slate-800 p-3 rounded-xl text-center md:text-right shadow-xs min-w-36 relative overflow-visible">
+              <AnimatePresence>
+                {floatingXPs.map(xp => (
+                  <motion.div
+                    key={xp.id}
+                    initial={{ opacity: 0, y: 15, scale: 0.8 }}
+                    animate={{ opacity: 1, y: -30, scale: 1 }}
+                    exit={{ opacity: 0, y: -50 }}
+                    transition={{ duration: 0.6, ease: 'easeOut' }}
+                    className={`absolute right-4 top-0 font-mono font-extrabold text-sm pointer-events-none px-2 py-0.5 rounded-md shadow-lg ${xp.colorClass} z-50`}
+                  >
+                    {xp.text}
+                  </motion.div>
+                ))}
+              </AnimatePresence>
               <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-wider block">
                 Reliability XP
               </span>
