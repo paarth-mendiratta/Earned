@@ -1006,7 +1006,7 @@ export default function Dashboard({
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in duration-200">
-                {detectedEmails.map((email) => (
+                {detectedEmails.slice(0, 4).map((email) => (
                   <div
                     key={email.id}
                     id={`email-card-${email.id}`}

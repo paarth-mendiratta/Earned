@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { Task, TrustState, TrustLevel, ActivityLogEntry, DetectedEmailTask } from './types';
 import { initAuth, googleSignIn, logout } from './utils/firebase';
-import { createCalendarEvent } from './utils/calendar';
+import { createCalendarEvent, fetchCalendarEvents } from './utils/calendar';
 import { getTrustChangeExplanation } from './utils/trust';
 import AddTask from './components/AddTask';
 import Dashboard from './components/Dashboard';
@@ -410,14 +410,104 @@ export default function App() {
     }
   }, [tasks, trustState.level]);
 
-  // Scan emails on calendarToken change
+  // Scan emails and rescan calendar slots on calendarToken change
   useEffect(() => {
     if (calendarToken) {
       handleScanEmails(calendarToken);
+      handleRescanCalendarSlots(calendarToken);
     } else {
       setDetectedEmails([]);
     }
   }, [calendarToken]);
+
+  // Rescan calendar events and re-optimize slots to avoid overlaps
+  const handleRescanCalendarSlots = async (token: string) => {
+    try {
+      console.log('[Rescan] Fetching calendar events to check for conflicting slot proposals...');
+      const events = await fetchCalendarEvents(token);
+      console.log('[Rescan] Fetched events:', events);
+      
+      const now = Date.now();
+      
+      setTasks(prevTasks => {
+        let changed = false;
+        const updated = prevTasks.map((task, index) => {
+          if (task.status === 'pending') {
+            // Find a slot of length 1.5 hours (90 minutes)
+            // Start looking from 4 hours from now, and stagger subsequent tasks slightly
+            let proposedStart = now + (4 + index * 2) * 60 * 60 * 1000;
+            const deadlineTime = new Date(task.deadline).getTime();
+            
+            if (proposedStart >= deadlineTime && deadlineTime > now) {
+              proposedStart = now + 15 * 60 * 1000; // 15 mins from now if deadline is close
+            }
+            
+            const duration = 1.5 * 60 * 60 * 1000; // 1.5 hours
+            let proposedEnd = proposedStart + duration;
+            
+            // Check for conflicts and find a free slot!
+            let conflict = true;
+            let iterations = 0;
+            while (conflict && iterations < 100) {
+              conflict = false;
+              iterations++;
+              
+              for (const event of events) {
+                if (event.start?.dateTime && event.end?.dateTime) {
+                  const eventStart = new Date(event.start.dateTime).getTime();
+                  const eventEnd = new Date(event.end.dateTime).getTime();
+                  
+                  // If there's an overlap
+                  if (proposedStart < eventEnd && proposedEnd > eventStart) {
+                    conflict = true;
+                    // Shift proposed start to 30 minutes after this conflicting event ends
+                    proposedStart = eventEnd + 30 * 60 * 1000;
+                    proposedEnd = proposedStart + duration;
+                    break; // Break loop to re-check against all events with new proposed times
+                  }
+                }
+              }
+            }
+            
+            const newStartIso = new Date(proposedStart).toISOString();
+            const newEndIso = new Date(proposedEnd).toISOString();
+            
+            if (
+              !task.suggestedTimeSlot || 
+              task.suggestedTimeSlot.start !== newStartIso || 
+              task.suggestedTimeSlot.end !== newEndIso
+            ) {
+              changed = true;
+              return {
+                ...task,
+                suggestedTimeSlot: {
+                  start: newStartIso,
+                  end: newEndIso
+                }
+              };
+            }
+          }
+          return task;
+        });
+        
+        if (changed) {
+          const rescanLog: ActivityLogEntry = {
+            id: `log-rescan-slots-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            type: 'schedule',
+            title: 'Proposed Slots Rescanned & Optimized',
+            content: 'The companion rescanned your connected calendar, identified potential event overlaps, and reassigned non-conflicting proposed slots.',
+            details: `Optimized scheduling for pending task(s) to avoid conflicts with your upcoming calendar events.`
+          };
+          setLogs(prevLogs => [rescanLog, ...prevLogs]);
+          return updated;
+        }
+        return prevTasks;
+      });
+    } catch (err) {
+      console.error('[handleRescanCalendarSlots] Error:', err);
+    }
+  };
 
   // Gmail Inbox Scanning API call
   const handleScanEmails = async (tokenToUse?: string) => {
