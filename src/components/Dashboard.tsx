@@ -395,7 +395,7 @@ export default function Dashboard({
         key={task.id}
         id={`task-card-${task.id}`}
         style={animStyle}
-        className={`bg-[#12131a] border rounded-2xl p-5 md:p-6 transition-all relative overflow-hidden ${
+        className={`bg-[#12131a] border rounded-2xl p-5 md:p-6 transition-all relative ${
           animation ? borderClass : (
             task.status !== 'pending' 
               ? 'opacity-55 border-[#212332] bg-[#12131a]/60 shadow-xs' : 
@@ -877,7 +877,7 @@ export default function Dashboard({
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="absolute inset-0 flex items-center justify-center bg-[#12131a]/90 backdrop-blur-xs z-50 pointer-events-none"
+            className="absolute inset-0 flex items-center justify-center bg-[#12131a]/90 backdrop-blur-xs z-50 pointer-events-none rounded-2xl"
           >
             {animation.type === 'complete' && (
               <motion.div 

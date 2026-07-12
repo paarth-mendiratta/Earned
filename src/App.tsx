@@ -103,6 +103,10 @@ function getFreshInitialTasks(): Task[] {
       firstStep: 'Navigate to passport portal and check processing-time estimates.',
       status: 'pending',
       completedOnTime: null,
+      suggestedTimeSlot: {
+        start: new Date(Date.now() + 40 * 60 * 60 * 1000).toISOString(),
+        end: new Date(Date.now() + (40 * 60 + 45) * 60 * 1000).toISOString(),
+      },
       subtasks: [...STATIC_SEED_SUBTASKS['seed-3']],
       subtasksCollapsed: true,
       subtasksRevealed: false
@@ -357,12 +361,28 @@ export default function App() {
     const assignedSlots: { start: number; end: number }[] = [];
     
     const updatedTasks = tasks.map((task, index) => {
-      if (task.status === 'pending' && task.suggestedTimeSlot) {
-        let startVal = new Date(task.suggestedTimeSlot.start).getTime();
-        let endVal = new Date(task.suggestedTimeSlot.end).getTime();
+      let currentTask = { ...task };
+      
+      // If task is pending but has no proposed calendar slot and we are at trust level 3+, generate one automatically
+      if (currentTask.status === 'pending' && !currentTask.suggestedTimeSlot && trustState.level >= 3) {
+        changed = true;
+        const proposedStart = new Date(now + (4 + index * 2) * 60 * 60 * 1000);
+        const proposedEnd = new Date(proposedStart.getTime() + 1.5 * 60 * 60 * 1000);
+        currentTask.suggestedTimeSlot = {
+          start: proposedStart.toISOString(),
+          end: proposedEnd.toISOString(),
+        };
+      }
+
+      if (currentTask.status === 'pending' && currentTask.suggestedTimeSlot) {
+        let startVal = new Date(currentTask.suggestedTimeSlot.start).getTime();
+        let endVal = new Date(currentTask.suggestedTimeSlot.end).getTime();
         
-        // Check if start time is in the past, or if it overlaps with an already assigned proposed slot
-        const isPast = startVal < now - 5000;
+        // Check if start or end is in the past, or if end is before/at start, or if timestamps are invalid
+        const isPast = startVal < now - 5000 || endVal < now - 5000;
+        const isEndBeforeStart = endVal <= startVal;
+        const isInvalid = isNaN(startVal) || isNaN(endVal) || isPast || isEndBeforeStart;
+        
         let overlaps = false;
         for (const assigned of assignedSlots) {
           if (startVal < assigned.end && endVal > assigned.start) {
@@ -371,9 +391,9 @@ export default function App() {
           }
         }
         
-        if (isPast || overlaps) {
+        if (isInvalid || overlaps) {
           changed = true;
-          const deadlineTime = new Date(task.deadline).getTime();
+          const deadlineTime = new Date(currentTask.deadline).getTime();
           // Find a new non-overlapping future slot
           const duration = (endVal - startVal > 0) ? (endVal - startVal) : 1.5 * 60 * 60 * 1000; // preserve duration or default to 1.5 hours
           
@@ -406,7 +426,7 @@ export default function App() {
           assignedSlots.push({ start: startVal, end: endVal });
           
           return {
-            ...task,
+            ...currentTask,
             suggestedTimeSlot: {
               start: new Date(proposedStart).toISOString(),
               end: new Date(proposedEnd).toISOString(),
@@ -416,7 +436,7 @@ export default function App() {
           assignedSlots.push({ start: startVal, end: endVal });
         }
       }
-      return task;
+      return currentTask;
     });
 
     if (changed) {
@@ -431,7 +451,7 @@ export default function App() {
       };
       setLogs(prev => [autoLog, ...prev]);
     }
-  }, [tasks]);
+  }, [tasks, trustState.level]);
 
   // Auth State Listener
   useEffect(() => {
