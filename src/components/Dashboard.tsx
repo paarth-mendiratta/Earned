@@ -179,6 +179,7 @@ export default function Dashboard({
   // Gmail drafting states
   const [editedDrafts, setEditedDrafts] = useState<Record<string, string>>({});
   const [confirmingSendTaskId, setConfirmingSendTaskId] = useState<string | null>(null);
+  const [confirmingDeleteTaskId, setConfirmingDeleteTaskId] = useState<string | null>(null);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
 
   // Editable proposed calendar slot states
@@ -187,7 +188,7 @@ export default function Dashboard({
 
   // Local animating tasks for smooth transition animations
   const [animatingTasks, setAnimatingTasks] = useState<Record<string, {
-    type: 'complete' | 'late' | 'missed';
+    type: 'complete' | 'late' | 'missed' | 'delete';
     phase: 'flash' | 'icon' | 'exit';
   }>>({});
 
@@ -214,7 +215,7 @@ export default function Dashboard({
 
   const triggerTaskAnimation = (
     taskId: string,
-    type: 'complete' | 'late' | 'missed',
+    type: 'complete' | 'late' | 'missed' | 'delete',
     actionFn: () => void
   ) => {
     // 1. Immediately (0ms) set phase to 'flash'
@@ -266,6 +267,10 @@ export default function Dashboard({
 
   const handleAnimateMiss = (taskId: string) => {
     triggerTaskAnimation(taskId, 'missed', () => onMissTask(taskId));
+  };
+
+  const handleAnimateDelete = (taskId: string) => {
+    triggerTaskAnimation(taskId, 'delete', () => onDeleteTask(taskId));
   };
 
   const pendingTasks = tasks.filter((t) => t.status === 'pending');
@@ -367,7 +372,7 @@ export default function Dashboard({
           borderClass = 'ring-2 ring-emerald-500 border-emerald-500 bg-emerald-950/15 shadow-[0_0_20px_rgba(16,185,129,0.3)]';
         } else if (type === 'late') {
           borderClass = 'ring-2 ring-amber-500 border-amber-500 bg-amber-950/15 shadow-[0_0_20px_rgba(245,158,11,0.3)]';
-        } else if (type === 'missed') {
+        } else if (type === 'missed' || type === 'delete') {
           borderClass = 'ring-2 ring-red-500 border-red-500 bg-red-950/15 shadow-[0_0_20px_rgba(239,68,68,0.3)]';
         }
       }
@@ -483,47 +488,20 @@ export default function Dashboard({
           </p>
         )}
 
-        {/* AI Micro-First Step Breakdown (Level 2+) */}
-        {task.status === 'pending' && trustState.level >= 2 && (
-          <div className="bg-[#171822] border border-[#212332] rounded-xl p-3.5 mt-3 text-left">
-            <div className="flex items-center justify-between gap-2 mb-1.5">
-              <span className="text-[9px] font-mono uppercase text-slate-400 font-bold block tracking-wider">
-                AI-Suggested First Step (To Beat Inertia):
-              </span>
-              {task.isFallback && (
-                <span className="text-[9px] font-mono text-amber-400 font-bold tracking-wider uppercase bg-amber-950/30 px-2 py-0.5 rounded border border-amber-500/15">
-                  Fallback Mode
-                </span>
-              )}
-            </div>
-            <div className="text-xs text-slate-200 font-medium leading-relaxed">
-              {task.gmailMessageId ? (
-                <div className="space-y-2.5">
-                  <p className="text-slate-300 italic leading-normal">
-                    {task.firstStep}
-                  </p>
-                  <div className="flex items-center gap-2 pt-2 border-t border-dashed border-[#2b2d3e]">
-                    <a
-                      href={`https://mail.google.com/mail/u/0/#inbox/${task.gmailMessageId}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-lg transition-colors shadow-xs cursor-pointer"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Open Email</span>
-                    </a>
-                    <span className="text-[10px] text-slate-500 font-mono">
-                      Opens directly in Gmail
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                <p className="flex items-start gap-1.5 flex-row">
-                  <span className="text-indigo-400 mt-0.5">▪</span>
-                  <span>{task.firstStep}</span>
-                </p>
-              )}
-            </div>
+        {task.status === 'pending' && task.gmailMessageId && (
+          <div className="flex items-center gap-2 mt-2.5 pt-2.5 border-t border-dashed border-[#2b2d3e]/50 text-left">
+            <a
+              href={`https://mail.google.com/mail/u/0/#inbox/${task.gmailMessageId}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-lg transition-colors shadow-xs cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Open Email</span>
+            </a>
+            <span className="text-[10px] text-slate-500 font-mono">
+              Opens directly in Gmail
+            </span>
           </div>
         )}
 
@@ -664,7 +642,7 @@ export default function Dashboard({
             )}
 
             {calendarToken ? (
-              confirmingScheduleTaskId === task.id ? (
+              confirmingScheduleTaskId === task.id && trustState.level !== 5 ? (
                 <div className="bg-amber-950/30 border border-amber-500/20 rounded-xl p-3 mt-2">
                   <p className="text-[11px] text-amber-200 font-semibold mb-2.5 leading-snug">
                     Authorize 'Earned' to create an entry on your real Google Calendar for "{task.title}"?
@@ -695,7 +673,13 @@ export default function Dashboard({
               ) : (
                 <button
                   id={`btn-approve-schedule-${task.id}`}
-                  onClick={() => setConfirmingScheduleTaskId(task.id)}
+                  onClick={() => {
+                    if (trustState.level === 5) {
+                      onApproveSchedule(task, startVal, endVal);
+                    } else {
+                      setConfirmingScheduleTaskId(task.id);
+                    }
+                  }}
                   disabled={isScheduling || isInvalidTime}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl transition-colors cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -740,7 +724,7 @@ export default function Dashboard({
                     <div className="text-[10px] text-slate-400 font-mono">
                       {demoMode ? (
                         <span className="text-amber-400 font-bold flex items-center gap-1 uppercase text-[9px]">
-                          <AlertTriangle className="w-3 h-3 text-amber-500" /> Gmail Demo Mode
+                          <AlertTriangle className="w-3 h-3 text-amber-500" /> Demo Mode
                         </span>
                       ) : (
                         <span className="text-emerald-400 font-bold flex items-center gap-1 uppercase text-[9px]">
@@ -809,6 +793,36 @@ export default function Dashboard({
           const graceWindowMs = 24 * 60 * 60 * 1000;
           const isWithinGraceWindow = isDeadlinePassed && (now.getTime() - deadlineDate.getTime() <= graceWindowMs);
 
+          if (confirmingDeleteTaskId === task.id) {
+            return (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mt-4 pt-3.5 border-t border-red-500/20 bg-red-950/10 p-3.5 rounded-xl animate-in fade-in duration-200 w-full">
+                <div className="flex items-center gap-2 text-xs font-semibold text-red-300">
+                  <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                  <span>Delete this task? This action cannot be undone.</span>
+                </div>
+                <div className="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
+                  <button
+                    id={`btn-confirm-delete-yes-${task.id}`}
+                    onClick={() => {
+                      setConfirmingDeleteTaskId(null);
+                      handleAnimateDelete(task.id);
+                    }}
+                    className="inline-flex items-center px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-lg transition-colors cursor-pointer shadow-sm"
+                  >
+                    Yes, delete
+                  </button>
+                  <button
+                    id={`btn-confirm-delete-cancel-${task.id}`}
+                    onClick={() => setConfirmingDeleteTaskId(null)}
+                    className="inline-flex items-center px-3 py-1.5 bg-[#171822] hover:bg-[#1d1f2e] border border-[#2b2d3e] text-slate-300 font-semibold text-xs rounded-lg transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
           return (
             <div className="flex items-center justify-between gap-4 mt-4 pt-3.5 border-t border-[#212332]">
               <div className="text-[11px] font-mono text-slate-400">
@@ -848,7 +862,7 @@ export default function Dashboard({
 
                 <button
                   id={`btn-delete-task-${task.id}`}
-                  onClick={() => onDeleteTask(task.id)}
+                  onClick={() => setConfirmingDeleteTaskId(task.id)}
                   className="p-1.5 text-slate-400 hover:text-red-400 transition-colors cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -902,6 +916,19 @@ export default function Dashboard({
                   <span className="text-3xl font-bold font-mono select-none leading-none">✗</span>
                 </div>
                 <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-rose-400 mt-2">Marked Missed</span>
+              </motion.div>
+            )}
+            {animation.type === 'delete' && (
+              <motion.div 
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="flex flex-col items-center gap-1"
+              >
+                <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-full text-red-400 shadow-[0_0_20px_rgba(239,68,68,0.15)]">
+                  <Trash2 className="w-8 h-8" />
+                </div>
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-red-400 mt-2">Deleted Task</span>
               </motion.div>
             )}
           </motion.div>

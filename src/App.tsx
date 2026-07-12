@@ -147,6 +147,12 @@ function parseEmailFromNotes(notes: string) {
   return null;
 }
 
+let globalIdCounter = 0;
+function generateUniqueId(prefix: string): string {
+  globalIdCounter++;
+  return `${prefix}-${Date.now()}-${globalIdCounter}-${Math.floor(Math.random() * 1000000)}`;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'tree' | 'logs'>('dashboard');
   const [showLanding, setShowLanding] = useState<boolean>(() => {
@@ -274,6 +280,7 @@ export default function App() {
   const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [isReviewRunning, setIsReviewRunning] = useState(false);
   const [isScheduling, setIsScheduling] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
   
   // Modals for celebration or risk assessment
   const [activeNotification, setActiveNotification] = useState<{
@@ -343,25 +350,60 @@ export default function App() {
     }
   }, [subtaskBonusMessage]);
 
-  // Automatically regenerate stale proposed calendar event slots that are in the past
+  // Automatically regenerate stale or overlapping proposed calendar event slots
   useEffect(() => {
     const now = Date.now();
     let changed = false;
+    const assignedSlots: { start: number; end: number }[] = [];
     
-    // Check if any pending task has a suggested time slot that is in the past
-    const updatedTasks = tasks.map(task => {
+    const updatedTasks = tasks.map((task, index) => {
       if (task.status === 'pending' && task.suggestedTimeSlot) {
-        const startVal = new Date(task.suggestedTimeSlot.start).getTime();
-        // Check if start time is in the past (using a small margin of 5 seconds to avoid micro-flicker)
-        if (startVal < now - 5000) {
+        let startVal = new Date(task.suggestedTimeSlot.start).getTime();
+        let endVal = new Date(task.suggestedTimeSlot.end).getTime();
+        
+        // Check if start time is in the past, or if it overlaps with an already assigned proposed slot
+        const isPast = startVal < now - 5000;
+        let overlaps = false;
+        for (const assigned of assignedSlots) {
+          if (startVal < assigned.end && endVal > assigned.start) {
+            overlaps = true;
+            break;
+          }
+        }
+        
+        if (isPast || overlaps) {
           changed = true;
           const deadlineTime = new Date(task.deadline).getTime();
-          let proposedStart = now + 4 * 60 * 60 * 1000; // 4 hrs from now
+          // Find a new non-overlapping future slot
+          const duration = (endVal - startVal > 0) ? (endVal - startVal) : 1.5 * 60 * 60 * 1000; // preserve duration or default to 1.5 hours
           
+          let proposedStart = now + (4 + index * 2) * 60 * 60 * 1000;
           if (proposedStart >= deadlineTime && deadlineTime > now) {
             proposedStart = now + 10 * 60 * 1000; // 10 mins from now if deadline is close but in future
           }
-          const proposedEnd = proposedStart + 1.5 * 60 * 60 * 1000; // 1.5 hr duration
+          let proposedEnd = proposedStart + duration;
+          
+          // Let's resolve overlaps with already assigned slots in this loop
+          let conflict = true;
+          let iterations = 0;
+          while (conflict && iterations < 150) {
+            conflict = false;
+            iterations++;
+            
+            for (const assigned of assignedSlots) {
+              if (proposedStart < assigned.end && proposedEnd > assigned.start) {
+                conflict = true;
+                proposedStart = assigned.end + 30 * 60 * 1000; // 30 mins buffer
+                proposedEnd = proposedStart + duration;
+                break;
+              }
+            }
+          }
+          
+          startVal = proposedStart;
+          endVal = proposedEnd;
+          
+          assignedSlots.push({ start: startVal, end: endVal });
           
           return {
             ...task,
@@ -370,6 +412,8 @@ export default function App() {
               end: new Date(proposedEnd).toISOString(),
             }
           };
+        } else {
+          assignedSlots.push({ start: startVal, end: endVal });
         }
       }
       return task;
@@ -382,8 +426,8 @@ export default function App() {
         id: `log-auto-schedule-refresh-${Date.now()}`,
         timestamp: new Date().toISOString(),
         type: 'schedule',
-        title: 'Stale Calendar Slot(s) Regenerated',
-        content: `The system detected and automatically regenerated stale past calendar slot suggestions into valid future slots.`,
+        title: 'Calendar Proposed Slots Re-optimized',
+        content: `The system detected and automatically re-optimized calendar slot suggestions to ensure all pending tasks have non-overlapping and future-valid slots.`,
       };
       setLogs(prev => [autoLog, ...prev]);
     }
@@ -431,6 +475,8 @@ export default function App() {
       
       setTasks(prevTasks => {
         let changed = false;
+        const assignedProposedSlots: { start: number; end: number }[] = [];
+        
         const updated = prevTasks.map((task, index) => {
           if (task.status === 'pending') {
             // Find a slot of length 1.5 hours (90 minutes)
@@ -448,10 +494,11 @@ export default function App() {
             // Check for conflicts and find a free slot!
             let conflict = true;
             let iterations = 0;
-            while (conflict && iterations < 100) {
+            while (conflict && iterations < 150) {
               conflict = false;
               iterations++;
               
+              // 1. Check against Google Calendar events
               for (const event of events) {
                 if (event.start?.dateTime && event.end?.dateTime) {
                   const eventStart = new Date(event.start.dateTime).getTime();
@@ -467,10 +514,26 @@ export default function App() {
                   }
                 }
               }
+              
+              if (conflict) continue;
+              
+              // 2. Check against already assigned proposed slots in this session to avoid overlap
+              for (const assigned of assignedProposedSlots) {
+                if (proposedStart < assigned.end && proposedEnd > assigned.start) {
+                  conflict = true;
+                  // Shift proposed start to 30 minutes after this assigned slot ends
+                  proposedStart = assigned.end + 30 * 60 * 1000;
+                  proposedEnd = proposedStart + duration;
+                  break;
+                }
+              }
             }
             
             const newStartIso = new Date(proposedStart).toISOString();
             const newEndIso = new Date(proposedEnd).toISOString();
+            
+            // Save this slot to avoid subsequent tasks overlapping with it
+            assignedProposedSlots.push({ start: proposedStart, end: proposedEnd });
             
             if (
               !task.suggestedTimeSlot || 
@@ -497,7 +560,7 @@ export default function App() {
             type: 'schedule',
             title: 'Proposed Slots Rescanned & Optimized',
             content: 'The companion rescanned your connected calendar, identified potential event overlaps, and reassigned non-conflicting proposed slots.',
-            details: `Optimized scheduling for pending task(s) to avoid conflicts with your upcoming calendar events.`
+            details: `Optimized scheduling for pending task(s) to avoid conflicts with your upcoming calendar events and other proposed slots.`
           };
           setLogs(prevLogs => [rescanLog, ...prevLogs]);
           return updated;
@@ -1318,9 +1381,22 @@ export default function App() {
 
   // Delete Task
   const handleDeleteTask = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (task) {
+      setTaskToDelete(task);
+    }
+  };
+
+  // Confirm Task Deletion & Clean Up Drafts
+  const handleConfirmDeleteTask = (taskId: string) => {
     setTasks(prev => prev.filter(t => t.id !== taskId));
+    setDrafts(prev => {
+      const updated = { ...prev };
+      delete updated[taskId];
+      return updated;
+    });
     const newLog: ActivityLogEntry = {
-      id: `log-${Date.now()}`,
+      id: generateUniqueId('log'),
       timestamp: new Date().toISOString(),
       type: 'agent_decision',
       title: 'Task Cleared',
@@ -1631,11 +1707,31 @@ export default function App() {
         logsToAdd.push(mainLog);
 
         // Perform side-effects if decision matches capability level
-        if (data.decision === 'schedule' && data.actionDetails?.suggestedTimeSlot && trustState.level >= 3) {
+        const isAutonomous = data.decision === 'autonomous' && trustState.level === 5;
+
+        // 1. Handle Scheduling action (Level 3+)
+        if ((data.decision === 'schedule' || isAutonomous) && data.actionDetails?.suggestedTimeSlot && trustState.level >= 3) {
           const targetId = data.actionDetails.taskId || (tasks[0]?.id);
           const taskToSchedule = tasks.find(t => t.id === targetId);
           if (targetId && taskToSchedule) {
-            if (calendarToken && trustState.level === 5) {
+            if (demoMode) {
+              // DEMO MODE - SIMULATE AUTONOMOUS BOOKING
+              setTasks(prev => prev.map(t => t.id === targetId ? {
+                ...t,
+                calendarEventId: `demo-event-${Date.now()}`,
+                suggestedTimeSlot: null
+              } : t));
+
+              const actLog: ActivityLogEntry = {
+                id: `log-loop-act-${Date.now()}`,
+                timestamp: new Date().toISOString(),
+                type: 'schedule',
+                title: `Agent Action [AUTONOMOUS] [DEMO MODE]: Real Event Booking Simulated`,
+                content: `AI autonomously simulated booking a block on your calendar for "${taskToSchedule.title}". (DEMO MODE — not actually booked)`,
+                details: `Event Title: ${taskToSchedule.title}\nDate/Time: ${new Date(data.actionDetails.suggestedTimeSlot.start).toLocaleString()} - ${new Date(data.actionDetails.suggestedTimeSlot.end).toLocaleTimeString()}\nLabel: DEMO MODE — not actually booked`
+              };
+              logsToAdd.push(actLog);
+            } else if (calendarToken && trustState.level === 5) {
               // Level 5 - AUTONOMOUS REAL EVENT CREATION (no confirm required)
               try {
                 const result = await createCalendarEvent(
@@ -1714,7 +1810,10 @@ export default function App() {
               logsToAdd.push(actLog);
             }
           }
-        } else if (data.decision === 'draft' && data.actionDetails?.draftText && trustState.level >= 4) {
+        }
+
+        // 2. Handle Drafting / Email action (Level 4+)
+        if ((data.decision === 'draft' || isAutonomous) && data.actionDetails?.draftText && trustState.level >= 4) {
           const targetId = data.actionDetails.taskId || (tasks[0]?.id);
           const taskToDraft = tasks.find(t => t.id === targetId);
           if (targetId && taskToDraft) {
@@ -1722,53 +1821,73 @@ export default function App() {
             
             if (emailInfo && trustState.level === 5) {
               // Level 5: AUTONOMOUS GMAIL REPLY
-              try {
-                const response = await fetch('/api/gmail/send-reply', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    accessToken: calendarToken,
-                    threadId: taskToDraft.id.replace('task-email-', ''),
-                    recipient: emailInfo.from,
-                    subject: emailInfo.subject,
-                    body: data.actionDetails.draftText,
-                    demoMode: demoMode
-                  })
-                });
-                
-                if (response.ok) {
-                  const sendData = await response.json();
-                  
-                  // Complete the task autonomously
-                  setTasks(prev => prev.map(t => t.id === targetId ? {
-                    ...t,
-                    status: 'done',
-                    completedOnTime: true
-                  } : t));
+              if (demoMode) {
+                // DEMO MODE - SIMULATE SENDING
+                setTasks(prev => prev.map(t => t.id === targetId ? {
+                  ...t,
+                  status: 'done',
+                  completedOnTime: true
+                } : t));
 
-                  const actLog: ActivityLogEntry = {
-                    id: `log-loop-act-${Date.now()}`,
-                    timestamp: new Date().toISOString(),
-                    type: 'autonomous_action',
-                    title: `Agent Action [AUTONOMOUS]: Real Email Reply Sent`,
-                    content: `AI autonomously replied to ${sendData.recipient} regarding "${emailInfo.subject}".`,
-                    details: `Message ID: ${sendData.messageId}\nRecipient: ${sendData.recipient}\nSubject: ${sendData.subject}\n\nSent Body:\n${sendData.body}`
-                  };
-                  logsToAdd.push(actLog);
-                } else {
-                  throw new Error('Gmail send failed');
-                }
-              } catch (err: any) {
-                console.error('Autonomous Gmail reply dispatch failed:', err);
-                const failLog: ActivityLogEntry = {
-                  id: `log-loop-fail-${Date.now()}`,
+                const actLog: ActivityLogEntry = {
+                  id: `log-loop-act-${Date.now()}`,
                   timestamp: new Date().toISOString(),
-                  type: 'draft',
-                  title: `Agent Action [AUTONOMOUS]: Email Reply Failed`,
-                  content: `Attempted to autonomously send email reply for "${taskToDraft.title}", but the API returned an error: ${err.message}`,
-                  details: `Recipient: ${emailInfo.from}`
+                  type: 'autonomous_action',
+                  title: `Agent Action [AUTONOMOUS] [DEMO MODE]: Email Reply Simulated`,
+                  content: `AI autonomously simulated sending a reply to ${emailInfo.from} regarding "${emailInfo.subject}". (DEMO MODE — not actually sent)`,
+                  details: `Recipient: ${emailInfo.from}\nSubject: ${emailInfo.subject}\nBody Preview:\n${data.actionDetails.draftText}\n\nLabel: DEMO MODE — not actually sent`
                 };
-                logsToAdd.push(failLog);
+                logsToAdd.push(actLog);
+              } else {
+                // Real Send (Demo Mode OFF)
+                try {
+                  const response = await fetch('/api/gmail/send-reply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      accessToken: calendarToken,
+                      threadId: taskToDraft.id.replace('task-email-', ''),
+                      recipient: emailInfo.from,
+                      subject: emailInfo.subject,
+                      body: data.actionDetails.draftText,
+                      demoMode: false
+                    })
+                  });
+                  
+                  if (response.ok) {
+                    const sendData = await response.json();
+                    
+                    // Complete the task autonomously
+                    setTasks(prev => prev.map(t => t.id === targetId ? {
+                      ...t,
+                      status: 'done',
+                      completedOnTime: true
+                    } : t));
+
+                    const actLog: ActivityLogEntry = {
+                      id: `log-loop-act-${Date.now()}`,
+                      timestamp: new Date().toISOString(),
+                      type: 'autonomous_action',
+                      title: `Agent Action [AUTONOMOUS]: Real Email Reply Sent`,
+                      content: `AI autonomously replied to ${sendData.recipient} regarding "${emailInfo.subject}".`,
+                      details: `Message ID: ${sendData.messageId}\nRecipient: ${sendData.recipient}\nSubject: ${sendData.subject}\n\nSent Body:\n${sendData.body}`
+                    };
+                    logsToAdd.push(actLog);
+                  } else {
+                    throw new Error('Gmail send failed');
+                  }
+                } catch (err: any) {
+                  console.error('Autonomous Gmail reply dispatch failed:', err);
+                  const failLog: ActivityLogEntry = {
+                    id: `log-loop-fail-${Date.now()}`,
+                    timestamp: new Date().toISOString(),
+                    type: 'draft',
+                    title: `Agent Action [AUTONOMOUS]: Email Reply Failed`,
+                    content: `Attempted to autonomously send email reply for "${taskToDraft.title}", but the API returned an error: ${err.message}`,
+                    details: `Recipient: ${emailInfo.from}`
+                  };
+                  logsToAdd.push(failLog);
+                }
               }
             } else {
               // Level 4 or non-email task: Create local draft structure
@@ -1791,7 +1910,10 @@ export default function App() {
               logsToAdd.push(actLog);
             }
           }
-        } else if (data.decision === 'nudge' && data.actionDetails?.nudgeMessage) {
+        }
+
+        // 3. Handle Nudge action
+        if (data.decision === 'nudge' && data.actionDetails?.nudgeMessage) {
           const actLog: ActivityLogEntry = {
             id: `log-loop-act-${Date.now()}`,
             timestamp: new Date().toISOString(),

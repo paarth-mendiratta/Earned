@@ -164,12 +164,12 @@ export default function DemoControls({
                   </span>
                 </button>
 
-                {/* Gmail Demo Mode Toggle */}
+                {/* Demo Mode Toggle */}
                 <div className="flex items-center justify-between p-2.5 bg-amber-950/10 border border-amber-500/10 rounded-xl text-xs mt-1 shadow-3xs">
                   <div className="flex flex-col gap-0.5 text-left">
                     <span className="font-extrabold text-amber-400 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-wider">
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                      Gmail Demo Mode
+                      Demo Mode
                     </span>
                     <span className="text-[10px] text-slate-400 font-medium leading-normal">
                       Simulate send actions instead of calling real APIs.
